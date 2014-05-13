@@ -1,0 +1,527 @@
+
+# /
+/build.mak
+/build.mak.old
+/user.mak
+/python
+/*.log
+/config.log
+/config.status
+/pjsip.pri
+/*.cache
+/*.ncb
+/*.opt
+/*.suo
+/.settings
+/.cdtproject
+/.project
+/.cproject
+
+# /build/
+/build/*.ncb
+/build/*.opt
+/build/os-auto.mak
+/build/cc-auto.mak
+
+# /build.symbian/
+/build.symbian/ABLD.BAT
+/build.symbian/*.cwlink
+/build.symbian/*.mcp
+/build.symbian/*_Data
+/build.symbian/*.xml
+/build.symbian/*_UID_.cpp
+/build.symbian/tmpnames.def
+/build.symbian/*.sis
+/build.symbian/*.sisx
+/build.symbian/*.cer
+/build.symbian/*.key
+/build.symbian/*.rnd
+
+# /doc/pjsip-book/
+/doc/pjsip-book/xml
+
+# /doc/pjsip-book/_build/
+/doc/pjsip-book/_build/*
+
+# /lib/
+/lib/*
+
+# /pjlib/bin/
+/pjlib/bin/*
+
+# /pjlib/build/
+/pjlib/build/.pjlib*
+/pjlib/build/output/*
+/pjlib/build/core
+/pjlib/build/*.ncb
+/pjlib/build/*.suo
+/pjlib/build/*.opt
+/pjlib/build/*.plg
+/pjlib/build/test*.txt
+/pjlib/build/.gdb*
+/pjlib/build/os-auto.mak
+/pjlib/build/pj*.user
+
+# /pjlib/build/output/
+/pjlib/build/output/*
+
+# /pjlib/build/wince-evc4/
+/pjlib/build/wince-evc4/*.vcb
+/pjlib/build/wince-evc4/*.vco
+/pjlib/build/wince-evc4/*.vcl
+
+# /pjlib/build/wince-evc4/output/
+/pjlib/build/wince-evc4/output/*
+
+# /pjlib/docs/
+/pjlib/docs/html
+/pjlib/docs/latex
+/pjlib/docs/pjlib.tag
+
+# /pjlib/include/pj/
+/pjlib/include/pj/config_site.h
+
+# /pjlib/include/pj/compat/
+/pjlib/include/pj/compat/os_auto.h
+/pjlib/include/pj/compat/m_auto.h
+
+# /pjlib/lib/
+/pjlib/lib/*
+
+# /pjlib-util/bin/
+/pjlib-util/bin/*
+
+# /pjlib-util/build/
+/pjlib-util/build/.pjlib*
+/pjlib-util/build/*.ncb
+/pjlib-util/build/*.opt
+/pjlib-util/build/*.lpg
+/pjlib-util/build/*.suo
+/pjlib-util/build/*.bsc
+/pjlib-util/build/*vcproj*.user
+/pjlib-util/build/*.sln
+/pjlib-util/build/*.plg
+/pjlib-util/build/os-auto.mak
+
+# /pjlib-util/build/output/
+/pjlib-util/build/output/*
+
+# /pjlib-util/build/wince-evc4/
+/pjlib-util/build/wince-evc4/*.vco
+/pjlib-util/build/wince-evc4/*.vcb
+/pjlib-util/build/wince-evc4/*.vcl
+
+# /pjlib-util/build/wince-evc4/output/
+/pjlib-util/build/wince-evc4/output/*
+
+# /pjlib-util/docs/
+/pjlib-util/docs/html
+/pjlib-util/docs/latex
+/pjlib-util/docs/rtf
+/pjlib-util/docs/pjlib-util.tag
+
+# /pjlib-util/lib/
+/pjlib-util/lib/*
+
+# /pjmedia/bin/
+/pjmedia/bin/*
+
+# /pjmedia/build/
+/pjmedia/build/*.ncb
+/pjmedia/build/*.opt
+/pjmedia/build/.pjmedia*
+/pjmedia/build/.pjsdp*
+/pjmedia/build/*.plg
+/pjmedia/build/*.vcproj*user
+/pjmedia/build/*.sln
+/pjmedia/build/*.suo
+/pjmedia/build/os-auto.mak
+
+# /pjmedia/build/output/
+/pjmedia/build/output/*
+
+# /pjmedia/build/wince-evc4/
+/pjmedia/build/wince-evc4/*.vcb
+/pjmedia/build/wince-evc4/*.vco
+/pjmedia/build/wince-evc4/*.vcl
+
+# /pjmedia/build/wince-evc4/output/
+/pjmedia/build/wince-evc4/output/*
+
+# /pjmedia/docs/
+/pjmedia/docs/html
+/pjmedia/docs/latex
+/pjmedia/docs/rtf
+/pjmedia/docs/pjmedia.tag
+
+# /pjmedia/include/pjmedia/
+/pjmedia/include/pjmedia/config_auto.h
+
+# /pjmedia/include/pjmedia-codec/
+/pjmedia/include/pjmedia-codec/config_auto.h
+
+# /pjmedia/lib/
+/pjmedia/lib/*
+
+# /pjnath/bin/
+/pjnath/bin/*
+
+# /pjnath/build/
+/pjnath/build/*.opt
+/pjnath/build/*.ncb
+/pjnath/build/*.plg
+/pjnath/build/TODO-LIST.TXT
+/pjnath/build/.pj*
+/pjnath/build/*.swp
+/pjnath/build/*.log
+/pjnath/build/pjsip++.dsp
+/pjnath/build/*.vcproj*user
+/pjnath/build/*.sln
+/pjnath/build/*.suo
+/pjnath/build/*.htm
+/pjnath/build/*.html
+/pjnath/build/os-auto.mak
+
+# /pjnath/build/output/
+/pjnath/build/output/*
+
+# /pjnath/build/wince-evc4/
+/pjnath/build/wince-evc4/*.vcl
+/pjnath/build/wince-evc4/*.vco
+/pjnath/build/wince-evc4/*.vcb
+
+# /pjnath/build/wince-evc4/output/
+/pjnath/build/wince-evc4/output/*
+
+# /pjnath/docs/
+/pjnath/docs/html
+/pjnath/docs/latex
+/pjnath/docs/pjnath.tag
+
+# /pjnath/lib/
+/pjnath/lib/*
+
+# /pjsip/bin/
+/pjsip/bin/*
+
+# /pjsip/build/
+/pjsip/build/*.opt
+/pjsip/build/*.ncb
+/pjsip/build/*.plg
+/pjsip/build/TODO-LIST.TXT
+/pjsip/build/.pj*
+/pjsip/build/*.swp
+/pjsip/build/*.log
+/pjsip/build/pjsip++.dsp
+/pjsip/build/*.vcproj*user
+/pjsip/build/*.sln
+/pjsip/build/*.suo
+/pjsip/build/*.htm
+/pjsip/build/*.html
+/pjsip/build/os-auto.mak
+
+# /pjsip/build/output/
+/pjsip/build/output/*
+
+# /pjsip/build/wince-evc4/
+/pjsip/build/wince-evc4/*.vcb
+/pjsip/build/wince-evc4/*.vco
+/pjsip/build/wince-evc4/*.vcl
+
+# /pjsip/build/wince-evc4/output/
+/pjsip/build/wince-evc4/output/*
+
+# /pjsip/docs/
+/pjsip/docs/html
+/pjsip/docs/latex
+/pjsip/docs/rtf
+/pjsip/docs/pjsip.tag
+
+# /pjsip/include/
+/pjsip/include/pjsip++
+
+# /pjsip/include/pjsip/
+/pjsip/include/pjsip/sip_autoconf.h
+
+# /pjsip/lib/
+/pjsip/lib/*
+
+# /pjsip/src/
+/pjsip/src/pjsip++
+
+# /pjsip-apps/bin/
+/pjsip-apps/bin/*
+
+# /pjsip-apps/bin/samples/
+/pjsip-apps/bin/samples/*
+
+# /pjsip-apps/build/
+/pjsip-apps/build/*.ncb
+/pjsip-apps/build/*.opt
+/pjsip-apps/build/*.plg
+/pjsip-apps/build/*.log
+/pjsip-apps/build/*.LOG
+/pjsip-apps/build/.*
+/pjsip-apps/build/*.sln
+/pjsip-apps/build/*.vcproj*user
+/pjsip-apps/build/*.suo
+/pjsip-apps/build/*.pdb
+/pjsip-apps/build/*.wav
+/pjsip-apps/build/*.WAV
+/pjsip-apps/build/activex-pjsua_p.c
+/pjsip-apps/build/dlldata.c
+/pjsip-apps/build/footprint.txt
+/pjsip-apps/build/footprint.htm
+/pjsip-apps/build/*.htm
+/pjsip-apps/build/PJSYSTEST*
+/pjsip-apps/build/*.aps
+
+# /pjsip-apps/build/output/
+/pjsip-apps/build/output/*
+
+# /pjsip-apps/build/wince-evc4/
+/pjsip-apps/build/wince-evc4/*.vco
+/pjsip-apps/build/wince-evc4/*.vcb
+/pjsip-apps/build/wince-evc4/*.vcl
+
+# /pjsip-apps/build/wince-evc4/output/
+/pjsip-apps/build/wince-evc4/output/*
+
+# /pjsip-apps/lib/
+/pjsip-apps/lib/*
+
+# /pjsip-apps/src/confbot/
+/pjsip-apps/src/confbot/*.pyc
+
+# /pjsip-apps/src/pjsua/android/
+/pjsip-apps/src/pjsua/android/bin
+/pjsip-apps/src/pjsua/android/obj
+/pjsip-apps/src/pjsua/android/libs
+/pjsip-apps/src/pjsua/android/gen
+/pjsip-apps/src/pjsua/android/.settings
+/pjsip-apps/src/pjsua/android/.*
+
+# /pjsip-apps/src/pjsua/android/jni/
+/pjsip-apps/src/pjsua/android/jni/pjsua_wrap.h
+/pjsip-apps/src/pjsua/android/jni/pjsua_wrap.cpp
+/pjsip-apps/src/pjsua/android/jni/pjsua.cpp
+/pjsip-apps/src/pjsua/android/jni/.*
+
+# /pjsip-apps/src/pjsua/android/src/org/pjsip/pjsua/
+/pjsip-apps/src/pjsua/android/src/org/pjsip/pjsua/PjsuaAppCallback.java
+/pjsip-apps/src/pjsua/android/src/org/pjsip/pjsua/pjsua.java
+/pjsip-apps/src/pjsua/android/src/org/pjsip/pjsua/pjsuaJNI.java
+/pjsip-apps/src/pjsua/android/src/org/pjsip/pjsua/SWIGTYPE*
+
+# /pjsip-apps/src/pjsua/bb10/
+/pjsip-apps/src/pjsua/bb10/.device
+/pjsip-apps/src/pjsua/bb10/.settings
+/pjsip-apps/src/pjsua/bb10/arm
+
+# /pjsip-apps/src/pjsua/bb10/translations/
+/pjsip-apps/src/pjsua/bb10/translations/PjsuaBB.qm
+
+# /pjsip-apps/src/pjsua/ios/ipjsua.xcodeproj/
+/pjsip-apps/src/pjsua/ios/ipjsua.xcodeproj/xcuserdata
+/pjsip-apps/src/pjsua/ios/ipjsua.xcodeproj/project.xcworkspace
+
+# /pjsip-apps/src/pjsua/symbian/
+/pjsip-apps/src/pjsua/symbian/.cproject
+/pjsip-apps/src/pjsua/symbian/.project
+
+# /pjsip-apps/src/pjsua/symbian/sis/
+/pjsip-apps/src/pjsua/symbian/sis/*.sis*
+
+# /pjsip-apps/src/pjsystest/
+/pjsip-apps/src/pjsystest/*.aps
+
+# /pjsip-apps/src/py_pjsua/
+/pjsip-apps/src/py_pjsua/build
+
+# /pjsip-apps/src/pygui/
+/pjsip-apps/src/pygui/pygui.log
+/pjsip-apps/src/pygui/pygui.dat
+/pjsip-apps/src/pygui/pygui.js
+
+# /pjsip-apps/src/python/
+/pjsip-apps/src/python/*.pyc
+/pjsip-apps/src/python/build
+/pjsip-apps/src/python/*.html
+
+# /pjsip-apps/src/python/samples/
+/pjsip-apps/src/python/samples/*.pyc
+
+# /pjsip-apps/src/swig/java/android/
+/pjsip-apps/src/swig/java/android/bin
+/pjsip-apps/src/swig/java/android/gen
+/pjsip-apps/src/swig/java/android/obj
+/pjsip-apps/src/swig/java/android/assets
+/pjsip-apps/src/swig/java/android/.cproject
+
+# /pjsip-apps/src/swig/java/android/libs/
+/pjsip-apps/src/swig/java/android/libs/android-support-*.jar
+
+# /pjsip-apps/src/swig/java/android/libs/armeabi/
+/pjsip-apps/src/swig/java/android/libs/armeabi/*
+
+# /pjsip-apps/src/swig/java/android/src/org/pjsip/pjsua2/
+/pjsip-apps/src/swig/java/android/src/org/pjsip/pjsua2/*.java
+/pjsip-apps/src/swig/java/android/src/org/pjsip/pjsua2/*.class
+
+# /pjsip-apps/src/swig/java/output/
+/pjsip-apps/src/swig/java/output/*
+
+# /pjsip-apps/src/swig/python/
+/pjsip-apps/src/swig/python/pjsua2.py
+/pjsip-apps/src/swig/python/pjsua2_wrap.cpp
+/pjsip-apps/src/swig/python/build
+/pjsip-apps/src/swig/python/pjsua2_wrap.h
+/pjsip-apps/src/swig/python/_pjsua2.pyd
+/pjsip-apps/src/swig/python/*.exe
+
+# /pjsip-apps/src/vidgui/
+/pjsip-apps/src/vidgui/moc_*
+/pjsip-apps/src/vidgui/vidgui
+/pjsip-apps/src/vidgui/Makefile
+/pjsip-apps/src/vidgui/README.TXT
+/pjsip-apps/src/vidgui/.project
+/pjsip-apps/src/vidgui/.cproject
+/pjsip-apps/src/vidgui/release
+/pjsip-apps/src/vidgui/debug
+/pjsip-apps/src/vidgui/*.log
+/pjsip-apps/src/vidgui/*.idb
+/pjsip-apps/src/vidgui/*.pdb
+/pjsip-apps/src/vidgui/*.vcproj
+/pjsip-apps/src/vidgui/*.user
+
+# /tests/automated/
+/tests/automated/tmp
+/tests/automated/*.xml
+
+# /tests/cdash/
+/tests/cdash/*.pyc
+/tests/cdash/cfg_site.py
+/tests/cdash/out.xml
+/tests/cdash/build.log
+
+# /tests/pjsua/
+/tests/pjsua/*.pyc
+/tests/pjsua/*log
+/tests/pjsua/p*.txt
+/tests/pjsua/logs
+
+# /tests/pjsua/scripts-call/
+/tests/pjsua/scripts-call/*.pyc
+
+# /tests/pjsua/scripts-media-playrec/
+/tests/pjsua/scripts-media-playrec/*.pyc
+
+# /tests/pjsua/scripts-pesq/
+/tests/pjsua/scripts-pesq/*.pyc
+
+# /tests/pjsua/scripts-pres/
+/tests/pjsua/scripts-pres/*.pyc
+
+# /tests/pjsua/scripts-recvfrom/
+/tests/pjsua/scripts-recvfrom/*.pyc
+
+# /tests/pjsua/scripts-run/
+/tests/pjsua/scripts-run/*.pyc
+
+# /tests/pjsua/scripts-sendto/
+/tests/pjsua/scripts-sendto/*.pyc
+
+# /tests/pjsua/tools/
+/tests/pjsua/tools/pe*
+/tests/pjsua/tools/cmp_wav
+
+# /tests/pjsua/wavs/
+/tests/pjsua/wavs/tmp*.wav
+
+# /third_party/
+
+# /third_party/bin/
+/third_party/bin/*
+
+# /third_party/build/
+/third_party/build/os-auto.mak
+
+# /third_party/build/baseclasses/
+/third_party/build/baseclasses/*.user
+/third_party/build/baseclasses/.*
+
+# /third_party/build/baseclasses/output/
+/third_party/build/baseclasses/output/*
+
+# /third_party/build/g7221/
+/third_party/build/g7221/*.user
+/third_party/build/g7221/*.plg
+/third_party/build/g7221/.*.depend
+
+# /third_party/build/g7221/output/
+/third_party/build/g7221/output/*
+
+# /third_party/build/gsm/
+/third_party/build/gsm/*.user
+/third_party/build/gsm/.*
+
+# /third_party/build/gsm/output/
+/third_party/build/gsm/output/*
+
+# /third_party/build/ilbc/
+/third_party/build/ilbc/*.user
+/third_party/build/ilbc/.*
+
+# /third_party/build/ilbc/output/
+/third_party/build/ilbc/output/*
+
+# /third_party/build/milenage/
+/third_party/build/milenage/*.user
+/third_party/build/milenage/*.vcl
+/third_party/build/milenage/*.vco
+/third_party/build/milenage/*.depend
+/third_party/build/milenage/*.plg
+
+# /third_party/build/milenage/output/
+/third_party/build/milenage/output/*
+
+# /third_party/build/portaudio/
+/third_party/build/portaudio/*.user
+/third_party/build/portaudio/.*
+/third_party/build/portaudio/os-auto.mak
+/third_party/build/portaudio/*.plg
+
+# /third_party/build/portaudio/output/
+/third_party/build/portaudio/output/*
+
+# /third_party/build/resample/
+/third_party/build/resample/*.user
+/third_party/build/resample/.*
+
+# /third_party/build/resample/output/
+/third_party/build/resample/output/*
+
+# /third_party/build/samplerate/
+/third_party/build/samplerate/*.plg
+/third_party/build/samplerate/*.vco
+
+# /third_party/build/samplerate/output/
+/third_party/build/samplerate/output/*
+
+# /third_party/build/speex/
+/third_party/build/speex/*.user
+/third_party/build/speex/.*
+
+# /third_party/build/speex/output/
+/third_party/build/speex/output/*
+
+# /third_party/build/srtp/
+/third_party/build/srtp/*.user
+/third_party/build/srtp/*.plg
+/third_party/build/srtp/.*depend
+
+# /third_party/build/srtp/output/
+/third_party/build/srtp/output/*
+
+# /third_party/lib/
+/third_party/lib/*
