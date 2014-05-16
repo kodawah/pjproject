@@ -202,7 +202,7 @@ typedef struct ffmpeg_private
     /* The ffmpeg decoder cannot set the output format, so format conversion
      * may be needed for post-decoding.
      */
-    enum PixelFormat		     expected_dec_fmt;
+    enum AVPixelFormat		     expected_dec_fmt;
 						/**< Expected output format of 
 						     ffmpeg decoder	    */
 
@@ -663,7 +663,7 @@ PJ_DEF(pj_status_t) pjmedia_codec_ffmpeg_vid_init(pjmedia_vid_codec_mgr *mgr,
 	    pjmedia_format_id raw_fmt[PJMEDIA_VID_CODEC_MAX_DEC_FMT_CNT];
 	    unsigned raw_fmt_cnt = 0;
 	    unsigned raw_fmt_cnt_should_be = 0;
-	    const enum PixelFormat *p = c->pix_fmts;
+	    const enum AVPixelFormat *p = c->pix_fmts;
 
 	    for(;(p && *p != -1) &&
 		 (raw_fmt_cnt < PJMEDIA_VID_CODEC_MAX_DEC_FMT_CNT);
@@ -672,10 +672,9 @@ PJ_DEF(pj_status_t) pjmedia_codec_ffmpeg_vid_init(pjmedia_vid_codec_mgr *mgr,
 		pjmedia_format_id fmt_id;
 
 		raw_fmt_cnt_should_be++;
-		status = PixelFormat_to_pjmedia_format_id(*p, &fmt_id);
+		status = AVPixelFormat_to_pjmedia_format_id(*p, &fmt_id);
 		if (status != PJ_SUCCESS) {
-		    PJ_LOG(6, (THIS_FILE, "Unrecognized ffmpeg pixel "
-			       "format %d", *p));
+		    PJ_LOG(6, (THIS_FILE, "Unrecognized AVPixelFormat %d", *p));
 		    continue;
 		}
 		
@@ -1084,14 +1083,13 @@ static void print_ffmpeg_err(int err)
 static pj_status_t open_ffmpeg_codec(ffmpeg_private *ff,
                                      pj_mutex_t *ff_mutex)
 {
-    enum PixelFormat pix_fmt;
+    enum AVPixelFormat pix_fmt;
     pjmedia_video_format_detail *vfd;
     pj_bool_t enc_opened = PJ_FALSE, dec_opened = PJ_FALSE;
     pj_status_t status;
 
     /* Get decoded pixel format */
-    status = pjmedia_format_id_to_PixelFormat(ff->param.dec_fmt.id,
-                                              &pix_fmt);
+    status = pjmedia_format_id_to_AVPixelFormat(ff->param.dec_fmt.id, &pix_fmt);
     if (status != PJ_SUCCESS)
         return status;
     ff->expected_dec_fmt = pix_fmt;
@@ -1570,8 +1568,8 @@ static pj_status_t check_decode_result(pjmedia_vid_codec *codec,
 	pj_status_t status;
 
 	/* Get current raw format id from ffmpeg decoder context */
-	status = PixelFormat_to_pjmedia_format_id(ff->dec_ctx->pix_fmt, 
-						  &new_fmt_id);
+        status = AVPixelFormat_to_pjmedia_format_id(ff->dec_ctx->pix_fmt,
+                                                    &new_fmt_id);
 	if (status != PJ_SUCCESS)
 	    return status;
 

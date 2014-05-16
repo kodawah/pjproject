@@ -53,14 +53,29 @@
     ( (LIBAVUTIL_VERSION_MICRO <  100 && LIBAVUTIL_VERSION_INT >= AV_VERSION_INT( a, b, c ) ) || \
       (LIBAVUTIL_VERSION_MICRO >= 100 && LIBAVUTIL_VERSION_INT >= AV_VERSION_INT( a, d, e ) ) )
 
+#if !LIBAVUTIL_VERSION_CHECK(51, 42, 0, 74, 0)
+#  define AVPixelFormat PixelFormat
+#  define AV_PIX_FMT_RGBA     PIX_FMT_RGBA
+#  define AV_PIX_FMT_BGR24    PIX_FMT_BGR24
+#  define AV_PIX_FMT_BGRA     PIX_FMT_BGRA
+#  define AV_PIX_FMT_NONE     PIX_FMT_NONE
+#  define AV_PIX_FMT_YUYV422  PIX_FMT_YUYV422
+#  define AV_PIX_FMT_UYVY422  PIX_FMT_UYVY422
+#  define AV_PIX_FMT_YUV420P  PIX_FMT_YUV420P
+#  define AV_PIX_FMT_YUV420P  PIX_FMT_YUV420P
+#  define AV_PIX_FMT_YUV422P  PIX_FMT_YUV422P
+#  define AV_PIX_FMT_YUVJ420P PIX_FMT_YUVJ420P
+#  define AV_PIX_FMT_YUVJ422P PIX_FMT_YUVJ422P
+#endif
+
 void pjmedia_ffmpeg_add_ref();
 void pjmedia_ffmpeg_dec_ref();
 
-pj_status_t pjmedia_format_id_to_PixelFormat(pjmedia_format_id fmt_id,
-					     enum PixelFormat *pixel_format);
+pj_status_t pjmedia_format_id_to_AVPixelFormat(pjmedia_format_id fmt_id,
+                                               enum AVPixelFormat *pixel_format);
 
-pj_status_t PixelFormat_to_pjmedia_format_id(enum PixelFormat pf,
-					     pjmedia_format_id *fmt_id);
+pj_status_t AVPixelFormat_to_pjmedia_format_id(enum AVPixelFormat pf,
+                                               pjmedia_format_id *fmt_id);
 
 pj_status_t pjmedia_format_id_to_CodecID(pjmedia_format_id fmt_id,
 					 unsigned *codec_id);
