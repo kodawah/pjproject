@@ -636,7 +636,7 @@ PJ_DEF(pj_status_t) pjmedia_codec_ffmpeg_vid_init(pjmedia_vid_codec_mgr *mgr,
          */
 
 	//PJ_LOG(3, (THIS_FILE, "%s", c->name));
-	status = CodecID_to_pjmedia_format_id(c->id, &fmt_id);
+	status = AVCodecID_to_pjmedia_format_id(c->id, &fmt_id);
 	/* Skip if format ID is unknown */
 	if (status != PJ_SUCCESS)
 	    continue;
