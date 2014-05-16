@@ -26,17 +26,6 @@
 #include "ffmpeg_util.h"
 #include <libavformat/avformat.h>
 
-/* PIX_FMT_GBR24P hassle:
- * - PIX_FMT_GBR24P is introduced (perhaps in avutil 51.20.1)
- * - suddenly PIX_FMT_GBR24P is replaced by PIX_FMT_GBRP, no alias defined,
- *   so PIX_FMT_GBR24P is just gone! (perhaps in avutil 51.42.0)
- * - then lately PIX_FMT_GBR24P is defined as PIX_FMT_GBRP
- */
-#if !defined(PIX_FMT_GBR24P) && \
-    LIBAVUTIL_VERSION_INT >= AV_VERSION_INT(51,42,0)
-#  define PIX_FMT_GBR24P PIX_FMT_GBRP
-#endif
-
 /* Conversion table between pjmedia_format_id and PixelFormat */
 static const struct ffmpeg_fmt_table_t
 {
@@ -47,8 +36,8 @@ static const struct ffmpeg_fmt_table_t
     { PJMEDIA_FORMAT_RGBA, PIX_FMT_RGBA},
     { PJMEDIA_FORMAT_RGB24,PIX_FMT_BGR24},
     { PJMEDIA_FORMAT_BGRA, PIX_FMT_BGRA},
-#if LIBAVUTIL_VERSION_INT >= AV_VERSION_INT(51, 20, 1)
-    { PJMEDIA_FORMAT_GBRP, PIX_FMT_GBR24P},
+#if LIBAVUTIL_VERSION_CHECK(51, 19, 0, 29, 0)
+    { PJMEDIA_FORMAT_GBRP, PIX_FMT_GBRP},
 #endif
 
     { PJMEDIA_FORMAT_AYUV, PIX_FMT_NONE},
