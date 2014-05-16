@@ -40,47 +40,55 @@
 
 #define THIS_FILE   "ffmpeg_vid_codecs.c"
 
-#define LIBAVCODEC_VER_AT_LEAST(major,minor)  (LIBAVCODEC_VERSION_MAJOR > major || \
-     					       (LIBAVCODEC_VERSION_MAJOR == major && \
-					        LIBAVCODEC_VERSION_MINOR >= minor))
-
 #include "../pjmedia/ffmpeg_util.h"
 #include <libavcodec/avcodec.h>
 #include <libavformat/avformat.h>
-#if LIBAVCODEC_VER_AT_LEAST(53,20)
-  /* Needed by 264 so far, on libavcodec 53.20 */
-# include <libavutil/opt.h>
+#include <libavutil/opt.h>
+
+#if PJMEDIA_HAS_FFMPEG_CODEC_H264 && \
+    LIBAVCODEC_VERSION_INT < AV_VERSION_INT(53, 20, 0)
+#   error "Must use libavcodec version 53.20.0 or later to enable H264"
 #endif
 
-
-/* Various compatibility */
-
-#if LIBAVCODEC_VER_AT_LEAST(53,20)
+/* libavcodec function compatibility */
+#if LIBAVCODEC_VERSION_CHECK(53, 6, 0, 8, 0)
 #  define AVCODEC_OPEN(ctx,c)		avcodec_open2(ctx,c,NULL)
 #else
 #  define AVCODEC_OPEN(ctx,c)		avcodec_open(ctx,c)
 #endif
 
-#if LIBAVCODEC_VER_AT_LEAST(53,61)
-#  if LIBAVCODEC_VER_AT_LEAST(54,59)
-   /* Not sure when AVCodec::encode is obsoleted/removed. */
-#      define AVCODEC_HAS_ENCODE(c)	(c->encode2)
-#  else
-   /* Not sure when AVCodec::encode2 is introduced. It appears in 
-    * libavcodec 53.61 where some codecs actually still use AVCodec::encode
-    * (e.g: H263, H264).
-    */
-#      define AVCODEC_HAS_ENCODE(c)	(c->encode || c->encode2)
-#  endif
+#if LIBAVCODEC_VERSION_CHECK(53, 34, 0, 56, 105)
+#  define AVCODEC_HAS_ENCODE(c)     (c->encode2)
+#else
+#  define AVCODEC_HAS_ENCODE(c)     (c->encode)
+#endif
+
+#if LIBAVCODEC_VERSION_INT >= AV_VERSION_INT(53, 8, 0)
+#  define AVCODEC_ALLOC_CONTEXT(ctx)    avcodec_alloc_context3(ctx)
+#else
+#  define AVCODEC_ALLOC_CONTEXT(ctx)    avcodec_alloc_context()
+#endif
+
+#ifndef FF_PROFILE_H264_CONSTRAINED
+#  define FF_PROFILE_H264_CONSTRAINED (1 << 9)
+#endif
+
+#if LIBAVCODEC_VERSION_INT >= AV_VERSION_INT(53, 4)
+#  define AV_PICTURE_TYPE_I     FF_I_TYPE;
+#endif
+
+#if LIBAVCODEC_VERSION_MAJOR <= 52
+#  define AVMEDIA_TYPE_VIDEO    CODEC_TYPE_VIDEO
+#endif
+
+/* libavutil compatibility */
+#if LIBAVUTIL_VERSION_CHECK(51, 12, 0, 21, 0)
 #  define AV_OPT_SET(obj,name,val,opt)	(av_opt_set(obj,name,val,opt)==0)
 #  define AV_OPT_SET_INT(obj,name,val)	(av_opt_set_int(obj,name,val,0)==0)
 #else
-#  define AVCODEC_HAS_ENCODE(c)		(c->encode)
 #  define AV_OPT_SET(obj,name,val,opt)	(av_set_string3(obj,name,val,opt,NULL)==0)
 #  define AV_OPT_SET_INT(obj,name,val)	(av_set_int(obj,name,val)!=NULL)
 #endif
-#define AVCODEC_HAS_DECODE(c)		(c->decode)
-
 
 /* Prototypes for FFMPEG codecs factory */
 static pj_status_t ffmpeg_test_alloc( pjmedia_vid_codec_factory *factory, 
@@ -258,15 +266,6 @@ struct ffmpeg_codec_desc
     AVCodec                     *dec;
 };
 
-
-#if PJMEDIA_HAS_FFMPEG_CODEC_H264 && !LIBAVCODEC_VER_AT_LEAST(53,20)
-#   error "Must use libavcodec version 53.20 or later to enable FFMPEG H264"
-#endif
-
-/* H264 constants */
-#define PROFILE_H264_BASELINE		66
-#define PROFILE_H264_MAIN		77
-
 /* Codec specific functions */
 #if PJMEDIA_HAS_FFMPEG_CODEC_H264
 static pj_status_t h264_preopen(ffmpeg_private *ff);
@@ -397,10 +396,10 @@ static pj_status_t h264_preopen(ffmpeg_private *ff)
 	/* Apply profile. */
 	ctx->profile  = data->fmtp.profile_idc;
 	switch (ctx->profile) {
-	case PROFILE_H264_BASELINE:
+	case FF_PROFILE_H264_BASELINE:
 	    profile = "baseline";
 	    break;
-	case PROFILE_H264_MAIN:
+	case FF_PROFILE_H264_MAIN:
 	    profile = "main";
 	    break;
 	default:
@@ -414,11 +413,8 @@ static pj_status_t h264_preopen(ffmpeg_private *ff)
 
 	/* Apply profile constraint bits. */
 	//PJ_TODO(set_h264_constraint_bits_properly_in_ffmpeg);
-	if (data->fmtp.profile_iop) {
-#if defined(FF_PROFILE_H264_CONSTRAINED)
+	if (data->fmtp.profile_iop)
 	    ctx->profile |= FF_PROFILE_H264_CONSTRAINED;
-#endif
-	}
 
 	/* Apply profile level. */
 	ctx->level    = data->fmtp.level;
@@ -620,10 +616,7 @@ PJ_DEF(pj_status_t) pjmedia_codec_ffmpeg_vid_init(pjmedia_vid_codec_mgr *mgr,
 	goto on_error;
 
     pjmedia_ffmpeg_add_ref();
-#if !LIBAVCODEC_VER_AT_LEAST(53,20)
-    /* avcodec_init() dissappeared between version 53.20 and 54.15, not sure
-     * exactly when 
-     */
+#if LIBAVCODEC_VERSION_INT < AV_VERSION_INT(53, 6)
     avcodec_init();
 #endif
     avcodec_register_all();
@@ -633,10 +626,7 @@ PJ_DEF(pj_status_t) pjmedia_codec_ffmpeg_vid_init(pjmedia_vid_codec_mgr *mgr,
         ffmpeg_codec_desc *desc;
 	pjmedia_format_id fmt_id;
 	int codec_info_idx;
-        
-#if LIBAVCODEC_VERSION_MAJOR <= 52
-#   define AVMEDIA_TYPE_VIDEO	CODEC_TYPE_VIDEO
-#endif
+
         if (c->type != AVMEDIA_TYPE_VIDEO)
             continue;
 
@@ -1081,7 +1071,7 @@ static pj_status_t ffmpeg_codec_init( pjmedia_vid_codec *codec,
 
 static void print_ffmpeg_err(int err)
 {
-#if LIBAVCODEC_VER_AT_LEAST(52,72)
+#if LIBAVUTIL_VERSION_INT >= AV_VERSION_INT(50, 13, 0)
     char errbuf[512];
     if (av_strerror(err, errbuf, sizeof(errbuf)) >= 0)
         PJ_LOG(5, (THIS_FILE, "ffmpeg err %d: %s", err, errbuf));
@@ -1112,20 +1102,12 @@ static pj_status_t open_ffmpeg_codec(ffmpeg_private *ff,
 
     /* Allocate ffmpeg codec context */
     if (ff->param.dir & PJMEDIA_DIR_ENCODING) {
-#if LIBAVCODEC_VER_AT_LEAST(53,20)
-	ff->enc_ctx = avcodec_alloc_context3(ff->enc);
-#else
-	ff->enc_ctx = avcodec_alloc_context();
-#endif
+	ff->enc_ctx = AVCODEC_ALLOC_CONTEXT(ff->enc);
 	if (ff->enc_ctx == NULL)
 	    goto on_error;
     }
     if (ff->param.dir & PJMEDIA_DIR_DECODING) {
-#if LIBAVCODEC_VER_AT_LEAST(53,20)
-	ff->dec_ctx = avcodec_alloc_context3(ff->dec);
-#else
-	ff->dec_ctx = avcodec_alloc_context();
-#endif
+	ff->dec_ctx = AVCODEC_ALLOC_CONTEXT(ff->dec);
 	if (ff->dec_ctx == NULL)
 	    goto on_error;
     }
@@ -1151,7 +1133,8 @@ static pj_status_t open_ffmpeg_codec(ffmpeg_private *ff,
 	/* Set no delay, note that this may cause some codec functionals
 	 * not working (e.g: rate control).
 	 */
-#if LIBAVCODEC_VER_AT_LEAST(52,113) && !LIBAVCODEC_VER_AT_LEAST(53,20)
+#if LIBAVCODEC_VERSION_INT >= AV_VERSION_INT(52, 113, 0) && \
+    LIBAVCODEC_VERSION_INT  < AV_VERSION_INT(53,20)
 	ctx->rc_lookahead = 0;
 #endif
     }
@@ -1444,19 +1427,14 @@ static pj_status_t ffmpeg_codec_encode_whole(pjmedia_vid_codec *codec,
     }
 
     /* Force keyframe */
-    if (opt && opt->force_keyframe) {
-#if LIBAVCODEC_VER_AT_LEAST(53,20)
+    if (opt && opt->force_keyframe)
 	avframe.pict_type = AV_PICTURE_TYPE_I;
-#else
-	avframe.pict_type = FF_I_TYPE;
-#endif
-    }
 
     av_init_packet(&avpacket);
     avpacket.data = (pj_uint8_t*)output->buf;
     avpacket.size = output_buf_len;
 
-#if LIBAVCODEC_VER_AT_LEAST(54,15)
+#if LIBAVCODEC_VERSION_CHECK(54, 2, 0, 1, 0)
     err = avcodec_encode_video2(ff->enc_ctx, &avpacket, &avframe, &got_packet);
     if (!err && got_packet)
 	err = avpacket.size;
@@ -1695,13 +1673,7 @@ static pj_status_t ffmpeg_codec_decode_whole(pjmedia_vid_codec *codec,
     output->bit_info = 0;
     output->timestamp = input->timestamp;
 
-#if LIBAVCODEC_VER_AT_LEAST(52,72)
-    //avpacket.flags = AV_PKT_FLAG_KEY;
-#else
-    avpacket.flags = 0;
-#endif
-
-#if LIBAVCODEC_VER_AT_LEAST(52,72)
+#if LIBAVCODEC_VERSION_INT >= (52, 23)
     err = avcodec_decode_video2(ff->dec_ctx, &avframe, 
                                 &got_picture, &avpacket);
 #else
