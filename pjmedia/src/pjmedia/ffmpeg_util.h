@@ -68,6 +68,18 @@
 #  define AV_PIX_FMT_YUVJ422P PIX_FMT_YUVJ422P
 #endif
 
+#if !LIBAVUTIL_VERSION_CHECK(51, 25, 0, 51, 0)
+#  define AVCodecID CodecID
+#  define AV_CODEC_ID_H261       CODEC_ID_H261
+#  define AV_CODEC_ID_H263       CODEC_ID_H263
+#  define AV_CODEC_ID_H263P      CODEC_ID_H263P
+#  define AV_CODEC_ID_H264       CODEC_ID_H264
+#  define AV_CODEC_ID_MPEG1VIDEO CODEC_ID_MPEG1VIDEO
+#  define AV_CODEC_ID_MPEG2VIDEO CODEC_ID_MPEG2VIDEO
+#  define AV_CODEC_ID_MPEG4      CODEC_ID_MPEG4
+#  define AV_CODEC_ID_MJPEG      CODEC_ID_MJPEG
+#endif
+
 void pjmedia_ffmpeg_add_ref();
 void pjmedia_ffmpeg_dec_ref();
 
@@ -77,10 +89,10 @@ pj_status_t pjmedia_format_id_to_AVPixelFormat(pjmedia_format_id fmt_id,
 pj_status_t AVPixelFormat_to_pjmedia_format_id(enum AVPixelFormat pf,
                                                pjmedia_format_id *fmt_id);
 
-pj_status_t pjmedia_format_id_to_CodecID(pjmedia_format_id fmt_id,
-					 unsigned *codec_id);
+pj_status_t pjmedia_format_id_to_AVCodecID(pjmedia_format_id fmt_id,
+                                           unsigned *codec_id);
 
-pj_status_t CodecID_to_pjmedia_format_id(unsigned codec_id,
-					 pjmedia_format_id *fmt_id);
+pj_status_t AVCodecID_to_pjmedia_format_id(unsigned codec_id,
+                                           pjmedia_format_id *fmt_id);
 
 #endif /* __PJMEDIA_FFMPEG_UTIL_H__ */
