@@ -66,7 +66,7 @@ static pj_status_t factory_create_converter(pjmedia_converter_factory *cf,
 					    const pjmedia_conversion_param *prm,
 					    pjmedia_converter **p_cv)
 {
-    enum PixelFormat srcFormat, dstFormat;
+    enum AVPixelFormat srcFormat, dstFormat;
     const pjmedia_video_format_detail *src_detail, *dst_detail;
     const pjmedia_video_format_info *src_fmt_info, *dst_fmt_info;
     struct SwsContext *sws_ctx;
@@ -101,11 +101,11 @@ static pj_status_t factory_create_converter(pjmedia_converter_factory *cf,
     src_detail = pjmedia_format_get_video_format_detail(&prm->src, PJ_TRUE);
     dst_detail = pjmedia_format_get_video_format_detail(&prm->dst, PJ_TRUE);
 
-    status = pjmedia_format_id_to_PixelFormat(prm->src.id, &srcFormat);
+    status = pjmedia_format_id_to_AVPixelFormat(prm->src.id, &srcFormat);
     if (status != PJ_SUCCESS)
 	return PJ_ENOTSUP;
 
-    status = pjmedia_format_id_to_PixelFormat(prm->dst.id, &dstFormat);
+    status = pjmedia_format_id_to_AVPixelFormat(prm->dst.id, &dstFormat);
     if (status != PJ_SUCCESS)
 	return PJ_ENOTSUP;
 
