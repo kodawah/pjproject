@@ -50,6 +50,7 @@
 #include <openssl/err.h>
 #include <openssl/x509v3.h>
 
+#include <gnutls/gnutls.h>
 
 #ifdef _MSC_VER
 #  pragma comment( lib, "libeay32")
@@ -303,61 +304,35 @@ static pj_status_t init_openssl(void)
     openssl_init_count = 1;
 
     /* Register error subsystem */
-    status = pj_register_strerror(PJ_SSL_ERRNO_START,
+    /*status = pj_register_strerror(PJ_SSL_ERRNO_START,
                                   PJ_SSL_ERRNO_SPACE_SIZE,
-                                  &ssl_strerror);
-    pj_assert(status == PJ_SUCCESS);
+                                  &ssl_strerror);*/
+    //pj_assert(status == PJ_SUCCESS);
 
     /* Init OpenSSL lib */
-    SSL_library_init();
-    SSL_load_error_strings();
-    OpenSSL_add_all_algorithms();
+    gnutls_global_init();
 
     /* Init available ciphers */
     if (openssl_cipher_num == 0) {
-        SSL_METHOD *meth = NULL;
-        SSL_CTX *ctx;
-        SSL *ssl;
-        STACK_OF(SSL_CIPHER) *sk_cipher;
-        unsigned i, n;
+        unsigned i;
 
-        meth = (SSL_METHOD*)SSLv23_server_method();
-        if (!meth)
-            meth = (SSL_METHOD*)TLSv1_server_method();
-        if (!meth)
-            meth = (SSL_METHOD*)SSLv3_server_method();
-#ifndef OPENSSL_NO_SSL2
-        if (!meth)
-            meth = (SSL_METHOD*)SSLv2_server_method();
-#endif
-        pj_assert(meth);
-
-        ctx=SSL_CTX_new(meth);
-        SSL_CTX_set_cipher_list(ctx, "ALL");
-
-        ssl = SSL_new(ctx);
-        sk_cipher = SSL_get_ciphers(ssl);
-
-        n = sk_SSL_CIPHER_num(sk_cipher);
-        if (n > PJ_ARRAY_SIZE(openssl_ciphers))
-            n = PJ_ARRAY_SIZE(openssl_ciphers);
-
-        for (i = 0; i < n; ++i) {
-            SSL_CIPHER *c;
-            c = sk_SSL_CIPHER_value(sk_cipher,i);
-            openssl_ciphers[i].id = (pj_ssl_cipher)
-                                    (pj_uint32_t)c->id & 0x00FFFFFF;
-            openssl_ciphers[i].name = SSL_CIPHER_get_name(c);
+        for (i = 0; ; i++) {
+            unsigned char id[2];
+            const char *suite = gnutls_cipher_suite_info(i, (char *)id, NULL, NULL, NULL, NULL);
+            openssl_ciphers[i].id = 0;
+            if (suite != NULL && i < PJ_ARRAY_SIZE(openssl_ciphers)) {
+                openssl_ciphers[i].id = (pj_ssl_cipher)
+                    (pj_uint32_t) ((id[0] << 8) | id[1]);
+                openssl_ciphers[i].name = suite;
+            } else
+                break;
         }
 
-        SSL_free(ssl);
-        SSL_CTX_free(ctx);
-
-        openssl_cipher_num = n;
+        openssl_cipher_num = i;
     }
 
     /* Create OpenSSL application data index for SSL socket */
-    sslsock_idx = SSL_get_ex_new_index(0, "SSL socket", NULL, NULL, NULL);
+    //sslsock_idx = SSL_get_ex_new_index(0, "SSL socket", NULL, NULL, NULL);
 
     return PJ_SUCCESS;
 }
