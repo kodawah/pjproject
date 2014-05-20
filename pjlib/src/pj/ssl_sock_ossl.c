@@ -51,6 +51,8 @@
 #include <openssl/x509v3.h>
 
 #include <gnutls/gnutls.h>
+#include <gnutls/x509.h>
+#include <gnutls/abstract.h>
 
 #ifdef _MSC_VER
 #  pragma comment( lib, "libeay32")
@@ -361,98 +363,84 @@ static int password_cb(char *buf, int num, int rwflag, void *user_data)
 
 
 /* SSL password callback. */
-static int verify_cb(int preverify_ok, X509_STORE_CTX *x509_ctx)
+static int verify_callback(gnutls_session_t session)
 {
     pj_ssl_sock_t *ssock;
-    SSL *ossl_ssl;
-    int err;
+    int ret;
+    unsigned int status;
+    unsigned int cert_list_size;
+    const gnutls_datum_t *cert_list;
+    gnutls_x509_crt_t cert;
 
     /* Get SSL instance */
-    ossl_ssl = X509_STORE_CTX_get_ex_data(x509_ctx,
-                                    SSL_get_ex_data_X509_STORE_CTX_idx());
-    pj_assert(ossl_ssl);
-
     /* Get SSL socket instance */
-    ssock = SSL_get_ex_data(ossl_ssl, sslsock_idx);
+    ssock = (pj_ssl_sock_t *)gnutls_session_get_ptr(session);
     pj_assert(ssock);
 
     /* Store verification status */
-    err = X509_STORE_CTX_get_error(x509_ctx);
-    switch (err) {
-    case X509_V_OK:
-        break;
+    ret = gnutls_certificate_verify_peers2(session, &status);
+    if (ret < 0)
+      return GNUTLS_E_CERTIFICATE_ERROR;
 
-    case X509_V_ERR_UNABLE_TO_GET_ISSUER_CERT:
-        ssock->verify_status |= PJ_SSL_CERT_EISSUER_NOT_FOUND;
-        break;
+    ret = gnutls_certificate_type_get(session) != GNUTLS_CRT_X509;
+    if (ret < 0)
+      return GNUTLS_E_CERTIFICATE_ERROR;
 
-    case X509_V_ERR_ERROR_IN_CERT_NOT_BEFORE_FIELD:
-    case X509_V_ERR_ERROR_IN_CERT_NOT_AFTER_FIELD:
-    case X509_V_ERR_UNABLE_TO_DECRYPT_CERT_SIGNATURE:
-    case X509_V_ERR_UNABLE_TO_DECODE_ISSUER_PUBLIC_KEY:
-        ssock->verify_status |= PJ_SSL_CERT_EINVALID_FORMAT;
-        break;
-
-    case X509_V_ERR_CERT_NOT_YET_VALID:
-    case X509_V_ERR_CERT_HAS_EXPIRED:
-        ssock->verify_status |= PJ_SSL_CERT_EVALIDITY_PERIOD;
-        break;
-
-    case X509_V_ERR_UNABLE_TO_GET_CRL:
-    case X509_V_ERR_CRL_NOT_YET_VALID:
-    case X509_V_ERR_CRL_HAS_EXPIRED:
-    case X509_V_ERR_UNABLE_TO_DECRYPT_CRL_SIGNATURE:
-    case X509_V_ERR_CRL_SIGNATURE_FAILURE:
-    case X509_V_ERR_ERROR_IN_CRL_LAST_UPDATE_FIELD:
-    case X509_V_ERR_ERROR_IN_CRL_NEXT_UPDATE_FIELD:
-        ssock->verify_status |= PJ_SSL_CERT_ECRL_FAILURE;
-        break;
-
-    case X509_V_ERR_DEPTH_ZERO_SELF_SIGNED_CERT:
-    case X509_V_ERR_CERT_UNTRUSTED:
-    case X509_V_ERR_SELF_SIGNED_CERT_IN_CHAIN:
-    case X509_V_ERR_UNABLE_TO_GET_ISSUER_CERT_LOCALLY:
-        ssock->verify_status |= PJ_SSL_CERT_EUNTRUSTED;
-        break;
-
-    case X509_V_ERR_CERT_SIGNATURE_FAILURE:
-    case X509_V_ERR_UNABLE_TO_VERIFY_LEAF_SIGNATURE:
-    case X509_V_ERR_SUBJECT_ISSUER_MISMATCH:
-    case X509_V_ERR_AKID_SKID_MISMATCH:
-    case X509_V_ERR_AKID_ISSUER_SERIAL_MISMATCH:
-    case X509_V_ERR_KEYUSAGE_NO_CERTSIGN:
-        ssock->verify_status |= PJ_SSL_CERT_EISSUER_MISMATCH;
-        break;
-
-    case X509_V_ERR_CERT_REVOKED:
-        ssock->verify_status |= PJ_SSL_CERT_EREVOKED;
-        break;
-
-    case X509_V_ERR_INVALID_PURPOSE:
-    case X509_V_ERR_CERT_REJECTED:
-    case X509_V_ERR_INVALID_CA:
-        ssock->verify_status |= PJ_SSL_CERT_EINVALID_PURPOSE;
-        break;
-
-    case X509_V_ERR_CERT_CHAIN_TOO_LONG: /* not really used */
-    case X509_V_ERR_PATH_LENGTH_EXCEEDED:
-        ssock->verify_status |= PJ_SSL_CERT_ECHAIN_TOO_LONG;
-        break;
-
-    /* Unknown errors */
-    case X509_V_ERR_OUT_OF_MEM:
-    default:
-        ssock->verify_status |= PJ_SSL_CERT_EUNKNOWN;
-        break;
+    if (status & GNUTLS_CERT_INVALID) {
+        if (status & GNUTLS_CERT_SIGNER_NOT_FOUND)
+            ssock->verify_status |= PJ_SSL_CERT_EISSUER_NOT_FOUND;
+        else if (status & GNUTLS_CERT_EXPIRED ||
+                 status & GNUTLS_CERT_NOT_ACTIVATED)
+            ssock->verify_status |= PJ_SSL_CERT_EVALIDITY_PERIOD;
+        else if (status & GNUTLS_CERT_SIGNER_NOT_CA ||
+                 status & GNUTLS_CERT_INSECURE_ALGORITHM)
+            ssock->verify_status |= PJ_SSL_CERT_EUNTRUSTED;
+//        else if (status & GNUTLS_CERT_UNEXPECTED_OWNER ||
+//                 status & GNUTLS_CERT_MISMATCH)
+//            ssock->verify_status |= PJ_SSL_CERT_EISSUER_MISMATCH;
+        else if (status & GNUTLS_CERT_REVOKED)
+            ssock->verify_status |= PJ_SSL_CERT_EREVOKED;
+        else
+            ssock->verify_status |= PJ_SSL_CERT_EUNKNOWN;
     }
 
     /* When verification is not requested just return ok here, however
-     * application can still get the verification status.
-     */
-    if (PJ_FALSE == ssock->param.verify_peer)
-        preverify_ok = 1;
+     * application can still get the verification status.  */
+    if (ssock->param.verify_peer) {
+        if (gnutls_x509_crt_init(&cert) < 0) {
+            fprintf(stderr, "Error in initialization\n");
+            goto fail;
+        }
 
-    return preverify_ok;
+        cert_list = gnutls_certificate_get_peers(session, &cert_list_size);
+        if (cert_list == NULL) {
+            fprintf(stderr, "No certificate found!\n");
+            goto fail;
+        }
+
+        /* TODO verify whole chain perhaps? */
+        if (gnutls_x509_crt_import (cert, &cert_list[0], GNUTLS_X509_FMT_DER) < 0) {
+            fprintf(stderr, "Error parsing certificate!\n");
+            goto fail;
+        }
+#if 0
+        if (!gnutls_x509_crt_check_hostname (cert, mydata->hostname_full.c_str())) {
+            g_error ("The certificate's owner does not match hostname '%s' !\n",
+                     mydata->hostname_full.c_str());
+            goto _fail;
+        }
+#endif
+        gnutls_x509_crt_deinit(cert);
+
+        /* notify gnutls to continue handshake normally */
+        return 1;
+
+fail:
+        ssock->verify_status |= PJ_SSL_CERT_EUNKNOWN;
+        return GNUTLS_E_CERTIFICATE_ERROR;
+    }
+
+    return 1;
 }
 
 /* Setting SSL sock cipher list */
