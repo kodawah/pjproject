@@ -31,6 +31,7 @@
 #include <pj/timer.h>
 
 
+#define LOG_LEVEL 9
 /* Only build when PJ_HAS_SSL_SOCK is enabled */
 #if defined(PJ_HAS_SSL_SOCK) && PJ_HAS_SSL_SOCK!=0
 
@@ -294,6 +295,10 @@ static struct openssl_ciphers_t {
 /* OpenSSL application data index */
 static int sslsock_idx;
 
+static void print_logs(int level, const char* msg)
+{
+    fprintf(stderr, "GnuTLS [%d]: %s", level, msg);
+}
 
 /* Initialize OpenSSL */
 static pj_status_t init_openssl(void)
@@ -313,6 +318,8 @@ static pj_status_t init_openssl(void)
 
     /* Init OpenSSL lib */
     gnutls_global_init();
+    gnutls_global_set_log_level(LOG_LEVEL);
+    gnutls_global_set_log_function(print_logs);
 
     /* Init available ciphers */
     if (openssl_cipher_num == 0) {
