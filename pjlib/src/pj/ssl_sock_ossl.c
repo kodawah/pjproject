@@ -31,7 +31,7 @@
 #include <pj/timer.h>
 
 
-#define LOG_LEVEL 9
+#define LOG_LEVEL 7
 /* Only build when PJ_HAS_SSL_SOCK is enabled */
 #if defined(PJ_HAS_SSL_SOCK) && PJ_HAS_SSL_SOCK!=0
 
@@ -175,6 +175,8 @@ struct pj_ssl_sock_t
     SSL                  *ossl_ssl;
     BIO                  *ossl_rbio;
     BIO                  *ossl_wbio;
+    gnutls_session_t      session;
+    gnutls_certificate_credentials_t xcred;
 };
 
 
@@ -292,9 +294,6 @@ static struct openssl_ciphers_t {
     const char      *name;
 } openssl_ciphers[MAX_CIPHERS];
 
-/* OpenSSL application data index */
-static int sslsock_idx;
-
 static void print_logs(int level, const char* msg)
 {
     fprintf(stderr, "GnuTLS [%d]: %s", level, msg);
@@ -303,8 +302,6 @@ static void print_logs(int level, const char* msg)
 /* Initialize OpenSSL */
 static pj_status_t init_openssl(void)
 {
-    pj_status_t status;
-
     if (openssl_init_count)
         return PJ_SUCCESS;
 
@@ -350,7 +347,8 @@ static pj_status_t init_openssl(void)
 /* Shutdown OpenSSL */
 static void shutdown_openssl(void)
 {
-    PJ_UNUSED_ARG(openssl_init_count);
+    openssl_init_count--;
+    gnutls_global_deinit();
 }
 
 
@@ -375,24 +373,25 @@ static int verify_callback(gnutls_session_t session)
     pj_ssl_sock_t *ssock;
     int ret;
     unsigned int status;
-    unsigned int cert_list_size;
-    const gnutls_datum_t *cert_list;
-    gnutls_x509_crt_t cert;
 
     /* Get SSL instance */
     /* Get SSL socket instance */
     ssock = (pj_ssl_sock_t *)gnutls_session_get_ptr(session);
     pj_assert(ssock);
 
+    /* Support only x509 format */
+    ret = gnutls_certificate_type_get(session) != GNUTLS_CRT_X509;
+    if (ret < 0) {
+        ssock->verify_status |= PJ_SSL_CERT_EINVALID_FORMAT;
+        return GNUTLS_E_CERTIFICATE_ERROR;
+    }
+
     /* Store verification status */
     ret = gnutls_certificate_verify_peers2(session, &status);
-    if (ret < 0)
-      return GNUTLS_E_CERTIFICATE_ERROR;
-
-    ret = gnutls_certificate_type_get(session) != GNUTLS_CRT_X509;
-    if (ret < 0)
-      return GNUTLS_E_CERTIFICATE_ERROR;
-
+    if (ret < 0) {
+        ssock->verify_status |= PJ_SSL_CERT_EUNKNOWN;
+        return GNUTLS_E_CERTIFICATE_ERROR;
+    }
     if (status & GNUTLS_CERT_INVALID) {
         if (status & GNUTLS_CERT_SIGNER_NOT_FOUND)
             ssock->verify_status |= PJ_SSL_CERT_EISSUER_NOT_FOUND;
@@ -409,11 +408,17 @@ static int verify_callback(gnutls_session_t session)
             ssock->verify_status |= PJ_SSL_CERT_EREVOKED;
         else
             ssock->verify_status |= PJ_SSL_CERT_EUNKNOWN;
+
+        return GNUTLS_E_CERTIFICATE_ERROR;
     }
 
     /* When verification is not requested just return ok here, however
      * application can still get the verification status.  */
     if (ssock->param.verify_peer) {
+        gnutls_x509_crt_t cert;
+        unsigned int cert_list_size;
+        const gnutls_datum_t *cert_list;
+
         if (gnutls_x509_crt_init(&cert) < 0) {
             fprintf(stderr, "Error in initialization\n");
             goto fail;
@@ -426,28 +431,31 @@ static int verify_callback(gnutls_session_t session)
         }
 
         /* TODO verify whole chain perhaps? */
-        if (gnutls_x509_crt_import (cert, &cert_list[0], GNUTLS_X509_FMT_DER) < 0) {
-            fprintf(stderr, "Error parsing certificate!\n");
+        ret = gnutls_x509_crt_import(cert, &cert_list[0], GNUTLS_X509_FMT_DER);
+        if (ret < 0)
+            ret = gnutls_x509_crt_import(cert, &cert_list[0], GNUTLS_X509_FMT_PEM);
+        if (ret < 0) {
+            fprintf(stderr, "Error parsing certificate %s!\n", gnutls_strerror(ret));
+            ssock->verify_status |= PJ_SSL_CERT_EINVALID_FORMAT;
+            return GNUTLS_E_CERTIFICATE_ERROR;
+        }
+        ret = gnutls_x509_crt_check_hostname(cert, ssock->param.server_name.ptr);
+        if (ret < 0) {
+            fprintf(stderr, "The certificate's owner does not match hostname '%s'. %s!\n",
+                    ssock->param.server_name.ptr, gnutls_strerror(ret));
             goto fail;
         }
-#if 0
-        if (!gnutls_x509_crt_check_hostname (cert, mydata->hostname_full.c_str())) {
-            g_error ("The certificate's owner does not match hostname '%s' !\n",
-                     mydata->hostname_full.c_str());
-            goto _fail;
-        }
-#endif
         gnutls_x509_crt_deinit(cert);
 
         /* notify gnutls to continue handshake normally */
-        return 1;
+        return 0;
 
 fail:
         ssock->verify_status |= PJ_SSL_CERT_EUNKNOWN;
         return GNUTLS_E_CERTIFICATE_ERROR;
     }
 
-    return 1;
+    return 0;
 }
 
 /* Setting SSL sock cipher list */
@@ -460,8 +468,8 @@ static pj_status_t create_ssl(pj_ssl_sock_t *ssock)
     BIO *bio;
     DH *dh;
     long options;
-    EC_KEY *ecdh;
-    SSL_METHOD *ssl_method;
+    const char *priority;
+    const char *err;
     SSL_CTX *ctx;
     pj_ssl_cert_t *cert;
     int mode, rc;
@@ -473,35 +481,34 @@ static pj_status_t create_ssl(pj_ssl_sock_t *ssock)
 
     /* Make sure OpenSSL library has been initialized */
     init_openssl();
+    gnutls_init(&ssock->session, GNUTLS_CLIENT);
+
+    /* Set SSL sock as application data of SSL instance */
+    gnutls_transport_set_ptr(ssock->session, (gnutls_transport_ptr_t) (uintptr_t) ssock->sock);
+    /* Set our user-data into gnutls session */
+    gnutls_session_set_ptr(ssock->session, (gnutls_transport_ptr_t) (uintptr_t) ssock);
+
 
     /* Determine SSL method to use */
     switch (ssock->param.proto) {
     case PJ_SSL_SOCK_PROTO_DEFAULT:
     case PJ_SSL_SOCK_PROTO_TLS1:
-        ssl_method = (SSL_METHOD*)TLSv1_method();
+        priority = "SECURE256:!VERS-SSL3.0";
         break;
-#ifndef OPENSSL_NO_SSL2
-    case PJ_SSL_SOCK_PROTO_SSL2:
-        ssl_method = (SSL_METHOD*)SSLv2_method();
-        break;
-#endif
     case PJ_SSL_SOCK_PROTO_SSL3:
-        ssl_method = (SSL_METHOD*)SSLv3_method();
+        priority = "SECURE256";
         break;
     case PJ_SSL_SOCK_PROTO_SSL23:
-        ssl_method = (SSL_METHOD*)SSLv23_method();
+        priority = "NORMAL";
         break;
-    //case PJ_SSL_SOCK_PROTO_DTLS1:
-        //ssl_method = (SSL_METHOD*)DTLSv1_method();
-        //break;
     default:
         return PJ_EINVAL;
     }
-
-    /* Create SSL context */
-    ctx = SSL_CTX_new(ssl_method);
-    if (ctx == NULL) {
-        return GET_SSL_STATUS(ssock);
+    status = gnutls_priority_set_direct(ssock->session, priority, &err);
+    if (status < 0) {
+        if (status == GNUTLS_E_INVALID_REQUEST)
+            fprintf(stderr, "Syntax error at: %s\n", err);
+        exit(1);
     }
 
     /* Apply credentials */
@@ -575,6 +582,7 @@ static pj_status_t create_ssl(pj_ssl_sock_t *ssock)
         }
     }
 
+#if 0
     #ifndef SSL_CTRL_SET_ECDH_AUTO
         #define SSL_CTRL_SET_ECDH_AUTO 94
     #endif
@@ -594,35 +602,35 @@ static pj_status_t create_ssl(pj_ssl_sock_t *ssock)
             EC_KEY_free(ecdh);
         }
     }
+#endif
 
     /* Create SSL instance */
-    ssock->ossl_ctx = ctx;
-    ssock->ossl_ssl = SSL_new(ssock->ossl_ctx);
-    if (ssock->ossl_ssl == NULL) {
-        return GET_SSL_STATUS(ssock);
-    }
-
-    /* Set SSL sock as application data of SSL instance */
-    SSL_set_ex_data(ssock->ossl_ssl, sslsock_idx, ssock);
-
+    gnutls_certificate_allocate_credentials(&ssock->xcred);
+    gnutls_certificate_set_x509_trust_file(ssock->xcred,
+                                           "/etc/ssl/certs/ca-certificates.crt",
+                                           GNUTLS_X509_FMT_PEM);
     /* SSL verification options */
     mode = SSL_VERIFY_PEER;
     if (ssock->is_server && ssock->param.require_client_cert)
         mode |= SSL_VERIFY_FAIL_IF_NO_PEER_CERT;
 
-    SSL_set_verify(ssock->ossl_ssl, mode, &verify_cb);
+    gnutls_certificate_set_verify_function(ssock->xcred, verify_callback);
+
+    gnutls_credentials_set(ssock->session, GNUTLS_CRD_CERTIFICATE, ssock->xcred);
 
     /* Set cipher list */
     status = set_cipher_list(ssock);
     if (status != PJ_SUCCESS)
         return status;
 
+#if 0
     /* Setup SSL BIOs */
     ssock->ossl_rbio = BIO_new(BIO_s_mem());
     ssock->ossl_wbio = BIO_new(BIO_s_mem());
     (void)BIO_set_close(ssock->ossl_rbio, BIO_CLOSE);
     (void)BIO_set_close(ssock->ossl_wbio, BIO_CLOSE);
     SSL_set_bio(ssock->ossl_ssl, ssock->ossl_rbio, ssock->ossl_wbio);
+#endif
 
     return PJ_SUCCESS;
 }
@@ -632,16 +640,16 @@ static pj_status_t create_ssl(pj_ssl_sock_t *ssock)
 static void destroy_ssl(pj_ssl_sock_t *ssock)
 {
     /* Destroy SSL instance */
-    if (ssock->ossl_ssl) {
-        SSL_shutdown(ssock->ossl_ssl);
-        SSL_free(ssock->ossl_ssl); /* this will also close BIOs */
-        ssock->ossl_ssl = NULL;
+    if (ssock->session) {
+        gnutls_bye(ssock->session, GNUTLS_SHUT_RDWR);
+        gnutls_deinit(ssock->session);
+        ssock->session = NULL;
     }
 
     /* Destroy SSL context */
-    if (ssock->ossl_ctx) {
-        SSL_CTX_free(ssock->ossl_ctx);
-        ssock->ossl_ctx = NULL;
+    if (ssock->xcred) {
+        gnutls_certificate_free_credentials(ssock->xcred);
+        ssock->xcred = NULL;
     }
 
     /* Potentially shutdown OpenSSL library if this is the last
@@ -674,7 +682,7 @@ static void reset_ssl_sock_state(pj_ssl_sock_t *ssock)
      * returning false error after a handshake error (in different SSL_CTX!).
      * For now, just clear thread error queue here.
      */
-    ERR_clear_error();
+    //ERR_clear_error();
 }
 
 
@@ -738,67 +746,10 @@ static pj_status_t set_cipher_list(pj_ssl_sock_t *ssock)
 }
 
 
-/* Parse OpenSSL ASN1_TIME to pj_time_val and GMT info */
-static pj_bool_t parse_ossl_asn1_time(pj_time_val *tv, pj_bool_t *gmt,
-                                      const ASN1_TIME *tm)
-{
-    unsigned long parts[7] = {0};
-    char *p, *end;
-    unsigned len;
-    pj_bool_t utc;
-    pj_parsed_time pt;
-    int i;
-
-    utc = tm->type == V_ASN1_UTCTIME;
-    p = (char*)tm->data;
-    len = tm->length;
-    end = p + len - 1;
-
-    /* GMT */
-    *gmt = (*end == 'Z');
-
-    /* parse parts */
-    for (i = 0; i < 7 && p < end; ++i) {
-        pj_str_t st;
-
-        if (i==0 && !utc) {
-            /* 4 digits year part for non-UTC time format */
-            st.slen = 4;
-        } else if (i==6) {
-            /* fraction of seconds */
-            if (*p == '.') ++p;
-            st.slen = end - p + 1;
-        } else {
-            /* other parts always 2 digits length */
-            st.slen = 2;
-        }
-        st.ptr = p;
-
-        parts[i] = pj_strtoul(&st);
-        p += st.slen;
-    }
-
-    /* encode parts to pj_time_val */
-    pt.year = parts[0];
-    if (utc)
-        pt.year += (pt.year < 50)? 2000:1900;
-    pt.mon = parts[1] - 1;
-    pt.day = parts[2];
-    pt.hour = parts[3];
-    pt.min = parts[4];
-    pt.sec = parts[5];
-    pt.msec = parts[6];
-
-    pj_time_encode(&pt, tv);
-
-    return PJ_TRUE;
-}
-
-
 /* Get Common Name field string from a general name string */
 static void get_cn_from_gen_name(const pj_str_t *gen_name, pj_str_t *cn)
 {
-    pj_str_t CN_sign = {"/CN=", 4};
+    pj_str_t CN_sign = {"CN=", 3};
     char *p, *q;
 
     pj_bzero(cn, sizeof(cn));
@@ -807,9 +758,9 @@ static void get_cn_from_gen_name(const pj_str_t *gen_name, pj_str_t *cn)
     if (!p)
         return;
 
-    p += 4; /* shift pointer to value part */
+    p += 3; /* shift pointer to value part */
     pj_strset(cn, p, gen_name->slen - (p - gen_name->ptr));
-    q = pj_strchr(cn, '/');
+    q = pj_strchr(cn, ',');
     if (q)
         cn->slen = q - p;
 }
@@ -819,30 +770,25 @@ static void get_cn_from_gen_name(const pj_str_t *gen_name, pj_str_t *cn)
  * hal already populated, this function will check if the contents need
  * to be updated by inspecting the issuer and the serial number.
  */
-static void get_cert_info(pj_pool_t *pool, pj_ssl_cert_info *ci, X509 *x)
+static void get_cert_info(pj_pool_t *pool, pj_ssl_cert_info *ci, gnutls_x509_crt_t cert)
 {
     pj_bool_t update_needed;
-    char buf[512];
-    pj_uint8_t serial_no[64] = {0}; /* should be >= sizeof(ci->serial_no) */
-    pj_uint8_t *p;
-    unsigned len;
-    GENERAL_NAMES *names = NULL;
+    char buf[512] = { 0 };
+    size_t bufsize = sizeof(buf);
+    pj_uint8_t serial_no[64] = { 0 }; /* should be >= sizeof(ci->serial_no) */
+    size_t serialsize = sizeof(serial_no);
 
-    pj_assert(pool && ci && x);
+    pj_assert(pool && ci && cert);
 
     /* Get issuer */
-    X509_NAME_oneline(X509_get_issuer_name(x), buf, sizeof(buf));
+    gnutls_x509_crt_get_issuer_dn(cert, buf, &bufsize);
 
     /* Get serial no */
-    p = (pj_uint8_t*) M_ASN1_STRING_data(X509_get_serialNumber(x));
-    len = M_ASN1_STRING_length(X509_get_serialNumber(x));
-    if (len > sizeof(ci->serial_no))
-        len = sizeof(ci->serial_no);
-    pj_memcpy(serial_no + sizeof(ci->serial_no) - len, p, len);
+    gnutls_x509_crt_get_serial(cert, serial_no, &serialsize);
 
     /* Check if the contents need to be updated. */
     update_needed = pj_strcmp2(&ci->issuer.info, buf) ||
-                    pj_memcmp(ci->serial_no, serial_no, sizeof(ci->serial_no));
+                    pj_memcmp(ci->serial_no, serial_no, serialsize);
     if (!update_needed)
         return;
 
@@ -851,7 +797,7 @@ static void get_cert_info(pj_pool_t *pool, pj_ssl_cert_info *ci, X509 *x)
     pj_bzero(ci, sizeof(pj_ssl_cert_info));
 
     /* Version */
-    ci->version = X509_get_version(x) + 1;
+    ci->version = gnutls_x509_crt_get_version(cert);
 
     /* Issuer */
     pj_strdup2(pool, &ci->issuer.info, buf);
@@ -861,76 +807,66 @@ static void get_cert_info(pj_pool_t *pool, pj_ssl_cert_info *ci, X509 *x)
     pj_memcpy(ci->serial_no, serial_no, sizeof(ci->serial_no));
 
     /* Subject */
-    pj_strdup2(pool, &ci->subject.info,
-               X509_NAME_oneline(X509_get_subject_name(x),
-                                 buf, sizeof(buf)));
+    bufsize = sizeof(buf);
+    gnutls_x509_crt_get_dn(cert, buf, &bufsize);
+    pj_strdup2(pool, &ci->subject.info, buf);
     get_cn_from_gen_name(&ci->subject.info, &ci->subject.cn);
 
     /* Validity */
-    parse_ossl_asn1_time(&ci->validity.start, &ci->validity.gmt,
-                         X509_get_notBefore(x));
-    parse_ossl_asn1_time(&ci->validity.end, &ci->validity.gmt,
-                         X509_get_notAfter(x));
+    ci->validity.end.sec = gnutls_x509_crt_get_expiration_time(cert);
+    ci->validity.start.sec = gnutls_x509_crt_get_activation_time(cert);
+    ci->validity.gmt = 0;
 
     /* Subject Alternative Name extension */
+    size_t len = sizeof(buf);
+    int i, ret, seq = 0;
+
+    pj_ssl_cert_name_type type;
     if (ci->version >= 3) {
-        names = (GENERAL_NAMES*) X509_get_ext_d2i(x, NID_subject_alt_name,
-                                                  NULL, NULL);
-    }
-    if (names) {
-        unsigned i, cnt;
+        /* Get the number of all alternate names so that we can allocate the correct
+         * number of bytes in subj_alt_name */
+        while (gnutls_x509_crt_get_subject_alt_name(cert, seq, buf, &len, NULL) != GNUTLS_E_REQUESTED_DATA_NOT_AVAILABLE)
+            seq++;
 
-        cnt = sk_GENERAL_NAME_num(names);
-        ci->subj_alt_name.entry = pj_pool_calloc(pool, cnt,
-                                            sizeof(*ci->subj_alt_name.entry));
-
-        for (i = 0; i < cnt; ++i) {
-            unsigned char *p = 0;
-            pj_ssl_cert_name_type type = PJ_SSL_CERT_NAME_UNKNOWN;
-            const GENERAL_NAME *name;
-
-            name = sk_GENERAL_NAME_value(names, i);
-
-            switch (name->type) {
-                case GEN_EMAIL:
-                    len = ASN1_STRING_to_UTF8(&p, name->d.ia5);
-                    type = PJ_SSL_CERT_NAME_RFC822;
-                    break;
-                case GEN_DNS:
-                    len = ASN1_STRING_to_UTF8(&p, name->d.ia5);
-                    type = PJ_SSL_CERT_NAME_DNS;
-                    break;
-                case GEN_URI:
-                    len = ASN1_STRING_to_UTF8(&p, name->d.ia5);
-                    type = PJ_SSL_CERT_NAME_URI;
-                    break;
-                case GEN_IPADD:
-                    p = ASN1_STRING_data(name->d.ip);
-                    len = ASN1_STRING_length(name->d.ip);
-                    type = PJ_SSL_CERT_NAME_IP;
-                    break;
-                default:
-                    break;
+        ci->subj_alt_name.entry = pj_pool_calloc(pool, seq,
+                                                 sizeof(*ci->subj_alt_name.entry));
+        for (i = 0; i < seq; i++) {
+            len = sizeof(buf) - 1;
+            ret = gnutls_x509_crt_get_subject_alt_name(cert, i, buf, &len, NULL);
+            switch (ret) {
+            case GNUTLS_SAN_IPADDRESS:
+                type = PJ_SSL_CERT_NAME_IP;
+                int af = pj_AF_INET();
+                if (len == sizeof(pj_in6_addr))
+                    af = pj_AF_INET6();
+                pj_inet_ntop2(af, buf, buf, sizeof(buf));
+                break;
+            case GNUTLS_SAN_URI:
+                buf[len] = '\0';
+                type = PJ_SSL_CERT_NAME_URI;
+                break;
+            case GNUTLS_SAN_RFC822NAME:
+                buf[len] = '\0';
+                type = PJ_SSL_CERT_NAME_RFC822;
+                break;
+            case GNUTLS_SAN_DNSNAME:
+                buf[len] = '\0';
+                type = PJ_SSL_CERT_NAME_DNS;
+                break;
+            default:
+                type = PJ_SSL_CERT_NAME_UNKNOWN;
+                break;
             }
 
-            if (p && len && type != PJ_SSL_CERT_NAME_UNKNOWN) {
+            if (len && type != PJ_SSL_CERT_NAME_UNKNOWN) {
                 ci->subj_alt_name.entry[ci->subj_alt_name.cnt].type = type;
-                if (type == PJ_SSL_CERT_NAME_IP) {
-                    int af = pj_AF_INET();
-                    if (len == sizeof(pj_in6_addr)) af = pj_AF_INET6();
-                    pj_inet_ntop2(af, p, buf, sizeof(buf));
-                    pj_strdup2(pool,
-                          &ci->subj_alt_name.entry[ci->subj_alt_name.cnt].name,
-                          buf);
-                } else {
-                    pj_strdup2(pool,
-                          &ci->subj_alt_name.entry[ci->subj_alt_name.cnt].name,
-                          (char*)p);
-                    OPENSSL_free(p);
-                }
+                pj_strdup2(pool, &ci->subj_alt_name.entry[ci->subj_alt_name.cnt].name, buf);
                 ci->subj_alt_name.cnt++;
             }
         }
+
+    /* Check against the commonName if no DNS alt. names were found,
+     * as per RFC3280. ????? */
     }
 }
 
@@ -940,28 +876,46 @@ static void get_cert_info(pj_pool_t *pool, pj_ssl_cert_info *ci, X509 *x)
  */
 static void update_certs_info(pj_ssl_sock_t *ssock)
 {
-    X509 *x;
+    gnutls_x509_crt_t cert = NULL;
+    const gnutls_datum_t *certs;
+    unsigned int certslen;
+    int err;
 
     pj_assert(ssock->ssl_state == SSL_STATE_ESTABLISHED);
 
     /* Active local certificate */
-    x = SSL_get_certificate(ssock->ossl_ssl);
-    if (x) {
-        get_cert_info(ssock->pool, &ssock->local_cert_info, x);
-        /* Don't free local's X509! */
-    } else {
-        pj_bzero(&ssock->local_cert_info, sizeof(pj_ssl_cert_info));
-    }
+    pj_bzero(&ssock->local_cert_info, sizeof(pj_ssl_cert_info));
 
     /* Active remote certificate */
-    x = SSL_get_peer_certificate(ssock->ossl_ssl);
-    if (x) {
-        get_cert_info(ssock->pool, &ssock->remote_cert_info, x);
-        /* Free peer's X509 */
-        X509_free(x);
-    } else {
-        pj_bzero(&ssock->remote_cert_info, sizeof(pj_ssl_cert_info));
+    certs = gnutls_certificate_get_peers(ssock->session, &certslen);
+    if (certs == NULL || certslen == 0) {
+        fprintf(stderr, "Could not obtain peer certificate - %s", gnutls_strerror(err));
+        goto out;
     }
+    err = gnutls_x509_crt_init(&cert);
+    if (err != GNUTLS_E_SUCCESS) {
+        fprintf(stderr, "Could not init certificate - %s", gnutls_strerror(err));
+        goto out;
+    }
+
+    /* The peer certificate is the first certificate in the list. */
+    err = gnutls_x509_crt_import(cert, certs, GNUTLS_X509_FMT_PEM);
+    if (err != GNUTLS_E_SUCCESS)
+        err = gnutls_x509_crt_import(cert, certs, GNUTLS_X509_FMT_DER);
+    if (err != GNUTLS_E_SUCCESS) {
+        fprintf(stderr, "Could not read peer certificate - %s", gnutls_strerror(err));
+        goto out;
+    }
+
+    get_cert_info(ssock->pool, &ssock->remote_cert_info, cert);
+
+out:
+    if (cert)
+        gnutls_x509_crt_deinit(cert);
+    else
+        pj_bzero(&ssock->remote_cert_info, sizeof(pj_ssl_cert_info));
+
+    return;
 }
 
 
@@ -1343,39 +1297,22 @@ static void on_timer(pj_timer_heap_t *th, struct pj_timer_entry *te)
 /* Asynchronouse handshake */
 static pj_status_t do_handshake(pj_ssl_sock_t *ssock)
 {
-    pj_status_t status;
     int err;
 
     /* Perform SSL handshake */
-    pj_lock_acquire(ssock->write_mutex);
-    err = SSL_do_handshake(ssock->ossl_ssl);
-    pj_lock_release(ssock->write_mutex);
+    //pj_lock_acquire(ssock->write_mutex);
+    do {
+         err = gnutls_handshake(ssock->session);
+    } while (err != 0 && !gnutls_error_is_fatal(err));
 
-    /* SSL_do_handshake() may put some pending data into SSL write BIO,
-     * flush it if any.
-     */
-    status = flush_write_bio(ssock, &ssock->handshake_op_key, 0, 0);
-    if (status != PJ_SUCCESS && status != PJ_EPENDING) {
-        return status;
+    if (gnutls_error_is_fatal(err)) {
+        fprintf(stderr, "Fatal error during handshake. %s\n", gnutls_strerror(err));
+        return PJ_EPENDING;
     }
+    //pj_lock_release(ssock->write_mutex);
 
-    if (err < 0) {
-        err = SSL_get_error(ssock->ossl_ssl, err);
-        if (err != SSL_ERROR_NONE && err != SSL_ERROR_WANT_READ)
-        {
-            /* Handshake fails */
-            status = STATUS_FROM_SSL_ERR(ssock, err);
-            return status;
-        }
-    }
-
-    /* Check if handshake has been completed */
-    if (SSL_is_init_finished(ssock->ossl_ssl)) {
-        ssock->ssl_state = SSL_STATE_ESTABLISHED;
-        return PJ_SUCCESS;
-    }
-
-    return PJ_EPENDING;
+    ssock->ssl_state = SSL_STATE_ESTABLISHED;
+    return PJ_SUCCESS;
 }
 
 
@@ -1768,13 +1705,12 @@ static pj_bool_t asock_on_connect_complete (pj_activesock_t *asock,
     ssock->send_buf.start = ssock->send_buf.buf;
     ssock->send_buf.len = 0;
 
-#ifdef SSL_set_tlsext_host_name
     /* Set server name to connect */
     if (ssock->param.server_name.slen) {
         /* Server name is null terminated already */
-        if (!SSL_set_tlsext_host_name(ssock->ossl_ssl,
-                                      ssock->param.server_name.ptr))
-        {
+        if (gnutls_server_name_set(ssock->session, GNUTLS_NAME_DNS,
+                                   ssock->param.server_name.ptr,
+                                   ssock->param.server_name.slen) != GNUTLS_E_SUCCESS) {
             char err_str[PJ_ERR_MSG_SIZE];
 
             ERR_error_string_n(ERR_get_error(), err_str, sizeof(err_str));
@@ -1782,11 +1718,9 @@ static pj_bool_t asock_on_connect_complete (pj_activesock_t *asock,
                 "failed: %s", err_str));
         }
     }
-#endif
 
     /* Start SSL handshake */
     ssock->ssl_state = SSL_STATE_HANDSHAKING;
-    SSL_set_connect_state(ssock->ossl_ssl);
 
     status = do_handshake(ssock);
     if (status != PJ_EPENDING)
@@ -2064,11 +1998,11 @@ PJ_DEF(pj_status_t) pj_ssl_sock_get_info (pj_ssl_sock_t *ssock,
     pj_sockaddr_cp(&info->local_addr, &ssock->local_addr);
 
     if (info->established) {
-        const SSL_CIPHER *cipher;
+        gnutls_cipher_algorithm_t cipher;
 
         /* Current cipher */
-        cipher = SSL_get_current_cipher(ssock->ossl_ssl);
-        info->cipher = (cipher->id & 0x00FFFFFF);
+        cipher = gnutls_cipher_get(ssock->session);
+        info->cipher = (cipher & 0x00FFFFFF);
 
         /* Remote address */
         pj_sockaddr_cp(&info->remote_addr, &ssock->rem_addr);
@@ -2208,9 +2142,10 @@ static pj_status_t ssl_write(pj_ssl_sock_t *ssock,
      * negotitation may be on progress, so sending data should be delayed
      * until re-negotiation is completed.
      */
-    pj_lock_acquire(ssock->write_mutex);
-    nwritten = SSL_write(ssock->ossl_ssl, data, (int)size);
-    pj_lock_release(ssock->write_mutex);
+    //pj_lock_acquire(ssock->write_mutex);
+    nwritten = gnutls_record_send(ssock->session, data, size);
+    //SSL_write(ssock->ossl_ssl, data, (int)size);
+    //pj_lock_release(ssock->write_mutex);
 
     if (nwritten == size) {
         /* All data written, flush write BIO to network socket */
