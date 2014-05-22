@@ -1307,14 +1307,17 @@ static pj_status_t do_handshake(pj_ssl_sock_t *ssock)
          err = gnutls_handshake(ssock->session);
     } while (err != 0 && !gnutls_error_is_fatal(err));
 
-    if (gnutls_error_is_fatal(err)) {
-        fprintf(stderr, "Fatal error during handshake. %s\n", gnutls_strerror(err));
+    if (err == GNUTLS_E_SUCCESS) {
+        ssock->ssl_state = SSL_STATE_ESTABLISHED;
+        return PJ_SUCCESS;
+    } else if (!gnutls_error_is_fatal(err)) {
+        fprintf(stderr, "error during handshake. %s\n", gnutls_strerror(err));
         return PJ_EPENDING;
+    } else {
+        fprintf(stderr, "FATAL error during handshake. %s\n", gnutls_strerror(err));
+        return PJ_ENOTFOUND;
     }
     //pj_lock_release(ssock->write_mutex);
-
-    ssock->ssl_state = SSL_STATE_ESTABLISHED;
-    return PJ_SUCCESS;
 }
 
 
