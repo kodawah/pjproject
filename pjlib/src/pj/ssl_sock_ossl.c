@@ -31,7 +31,7 @@
 #include <pj/timer.h>
 
 
-#define LOG_LEVEL 7
+#define LOG_LEVEL 9
 /* Only build when PJ_HAS_SSL_SOCK is enabled */
 #if defined(PJ_HAS_SSL_SOCK) && PJ_HAS_SSL_SOCK!=0
 

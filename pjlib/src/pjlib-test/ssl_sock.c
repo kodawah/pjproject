@@ -1364,7 +1364,7 @@ int ssl_sock_test(void)
 	return ret;
 
     PJ_LOG(3,("", "..https client test"));
-    ret = https_client_test(30000);
+    ret = https_client_test(3000000000000000);
     // Ignore test result as internet connection may not be available.
     //if (ret != 0)
 	//return ret;
