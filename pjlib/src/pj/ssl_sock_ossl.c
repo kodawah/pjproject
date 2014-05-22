@@ -401,9 +401,11 @@ static int verify_callback(gnutls_session_t session)
         else if (status & GNUTLS_CERT_SIGNER_NOT_CA ||
                  status & GNUTLS_CERT_INSECURE_ALGORITHM)
             ssock->verify_status |= PJ_SSL_CERT_EUNTRUSTED;
-//        else if (status & GNUTLS_CERT_UNEXPECTED_OWNER ||
-//                 status & GNUTLS_CERT_MISMATCH)
-//            ssock->verify_status |= PJ_SSL_CERT_EISSUER_MISMATCH;
+#if GNUTLS_VERSION_MAJOR >= 3
+        else if (status & GNUTLS_CERT_UNEXPECTED_OWNER ||
+                 status & GNUTLS_CERT_MISMATCH)
+            ssock->verify_status |= PJ_SSL_CERT_EISSUER_MISMATCH;
+#endif
         else if (status & GNUTLS_CERT_REVOKED)
             ssock->verify_status |= PJ_SSL_CERT_EREVOKED;
         else
@@ -889,7 +891,7 @@ static void update_certs_info(pj_ssl_sock_t *ssock)
     /* Active remote certificate */
     certs = gnutls_certificate_get_peers(ssock->session, &certslen);
     if (certs == NULL || certslen == 0) {
-        fprintf(stderr, "Could not obtain peer certificate - %s", gnutls_strerror(err));
+        fprintf(stderr, "Could not obtain peer certificate");
         goto out;
     }
     err = gnutls_x509_crt_init(&cert);
