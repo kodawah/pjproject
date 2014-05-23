@@ -463,6 +463,24 @@ fail:
 /* Setting SSL sock cipher list */
 static pj_status_t set_cipher_list(pj_ssl_sock_t *ssock);
 
+ssize_t data_push(gnutls_transport_ptr_t ptr, const void* data, size_t len)
+{
+    pj_ioqueue_op_key_t send_key;
+    pj_ssl_sock_t *ssock = (pj_ssl_sock_t *)ptr;
+    pj_sock_send(ssock->sock, data, &len, 0);
+    return len;
+}
+
+// GnuTLS calls this function to receive data from the transport layer. We set
+// this callback with gnutls_transport_set_pull_function(). It should act like
+// recv() (see the manual for specifics).
+ssize_t data_pull(gnutls_transport_ptr_t ptr, void* data, size_t len)
+{
+    pj_ssl_sock_t *ssock = (pj_ssl_sock_t *)ptr;
+    pj_sock_recv(ssock->sock, data, &len, 0);
+    return len;
+}
+
 
 /* Create and initialize new SSL context and instance */
 static pj_status_t create_ssl(pj_ssl_sock_t *ssock)
@@ -486,10 +504,14 @@ static pj_status_t create_ssl(pj_ssl_sock_t *ssock)
     gnutls_init(&ssock->session, GNUTLS_CLIENT);
 
     /* Set SSL sock as application data of SSL instance */
-    gnutls_transport_set_ptr(ssock->session, (gnutls_transport_ptr_t) (uintptr_t) ssock->sock);
+    gnutls_transport_set_ptr(ssock->session, (gnutls_transport_ptr_t) (uintptr_t) ssock);
     /* Set our user-data into gnutls session */
     gnutls_session_set_ptr(ssock->session, (gnutls_transport_ptr_t) (uintptr_t) ssock);
 
+    // Set the callback that allows GnuTLS to PUSH data TO the transport layer
+    gnutls_transport_set_push_function(ssock->session, data_push);
+    // Set the callback that allows GnuTls to PULL data FROM the tranport layer
+    gnutls_transport_set_pull_function(ssock->session, data_pull);
 
     /* Determine SSL method to use */
     switch (ssock->param.proto) {
@@ -643,7 +665,7 @@ static void destroy_ssl(pj_ssl_sock_t *ssock)
 {
     /* Destroy SSL instance */
     if (ssock->session) {
-        gnutls_bye(ssock->session, GNUTLS_SHUT_RDWR);
+        gnutls_bye(ssock->session, GNUTLS_SHUT_WR);
         gnutls_deinit(ssock->session);
         ssock->session = NULL;
     }
@@ -1194,14 +1216,15 @@ pj_status_t pj_ssl_sock_ossl_test_send_buf(pj_pool_t *pool)
 static pj_status_t flush_write_bio(pj_ssl_sock_t *ssock,
                                    pj_ioqueue_op_key_t *send_key,
                                    pj_size_t orig_len,
-                                   unsigned flags)
+                                   unsigned flags, void *data)
 {
-    char *data;
     pj_ssize_t len;
     write_data_t *wdata;
     pj_size_t needed_len;
     pj_status_t status;
 
+return PJ_SUCCESS;
+#if 0
     pj_lock_acquire(ssock->write_mutex);
 
     /* Check if there is data in write BIO, flush it if any */
@@ -1216,9 +1239,10 @@ static pj_status_t flush_write_bio(pj_ssl_sock_t *ssock,
         pj_lock_release(ssock->write_mutex);
         return PJ_SUCCESS;
     }
+#endif
 
     /* Calculate buffer size needed, and align it to 8 */
-    needed_len = len + sizeof(write_data_t);
+    needed_len = orig_len + sizeof(write_data_t);
     needed_len = ((needed_len + 7) >> 3) << 3;
 
     /* Allocate buffer for send data */
@@ -1233,25 +1257,25 @@ static pj_status_t flush_write_bio(pj_ssl_sock_t *ssock,
     wdata->key.user_data = wdata;
     wdata->app_key = send_key;
     wdata->record_len = needed_len;
-    wdata->data_len = len;
+    wdata->data_len = orig_len;
     wdata->plain_data_len = orig_len;
     wdata->flags = flags;
-    pj_memcpy(&wdata->data, data, len);
+    pj_memcpy(&wdata->data, data, orig_len);
 
     /* Reset write BIO */
-    (void)BIO_reset(ssock->ossl_wbio);
+    //(void)BIO_reset(ssock->ossl_wbio);
 
     /* Ticket #1573: Don't hold mutex while calling PJLIB socket send(). */
-    pj_lock_release(ssock->write_mutex);
+    //pj_lock_release(ssock->write_mutex);
 
     /* Send it */
     if (ssock->param.sock_type == pj_SOCK_STREAM()) {
         status = pj_activesock_send(ssock->asock, &wdata->key,
-                                    wdata->data.content, &len,
+                                    wdata->data.content, &orig_len,
                                     flags);
     } else {
         status = pj_activesock_sendto(ssock->asock, &wdata->key,
-                                      wdata->data.content, &len,
+                                      wdata->data.content, &orig_len,
                                       flags,
                                       (pj_sockaddr_t*)&ssock->rem_addr,
                                       ssock->addr_len);
@@ -1340,13 +1364,13 @@ static pj_bool_t asock_on_data_read (pj_activesock_t *asock,
     /* Socket error or closed */
     if (data && size > 0) {
         /* Consume the whole data */
-        nwritten = BIO_write(ssock->ossl_rbio, data, (int)size);
+        nwritten = gnutls_record_send(ssock->session, data, size);
+        //nwritten = BIO_write(ssock->ossl_rbio, data, (int)size);
         if (nwritten < size) {
             status = GET_SSL_STATUS(ssock);
             goto on_error;
         }
     }
-
     /* Check if SSL handshake hasn't finished yet */
     if (ssock->ssl_state == SSL_STATE_HANDSHAKING) {
         pj_bool_t ret = PJ_TRUE;
@@ -1367,21 +1391,24 @@ static pj_bool_t asock_on_data_read (pj_activesock_t *asock,
             read_data_t *buf = *(OFFSET_OF_READ_DATA_PTR(ssock, data));
             void *data_ = (pj_int8_t*)buf->data + buf->len;
             int size_ = (int)(ssock->read_size - buf->len);
+            int err;
 
             /* SSL_read() may write some data to BIO write when re-negotiation
              * is on progress, so let's protect it with write mutex.
              */
             pj_lock_acquire(ssock->write_mutex);
-            size_ = SSL_read(ssock->ossl_ssl, data_, size_);
+            err = gnutls_record_recv(ssock->session, data_, size_);
+            //size_ = SSL_read(ssock->ossl_ssl, data_, size_);
             pj_lock_release(ssock->write_mutex);
+            fprintf(stderr, "recv: %s\n", gnutls_strerror(err));
 
-            if (size_ > 0 || status != PJ_SUCCESS) {
+            if (err > 0 || status != PJ_SUCCESS) {
                 if (ssock->param.cb.on_data_read) {
                     pj_bool_t ret;
                     pj_size_t remainder_ = 0;
 
                     if (size_ > 0)
-                        buf->len += size_;
+                        buf->len += err;
 
                     ret = (*ssock->param.cb.on_data_read)(ssock, buf->data,
                                                           buf->len, status,
@@ -1408,12 +1435,12 @@ static pj_bool_t asock_on_data_read (pj_activesock_t *asock,
 
             } else {
 
-                int err = SSL_get_error(ssock->ossl_ssl, (int)size);
+                //int err = SSL_get_error(ssock->ossl_ssl, (int)size);
 
                 /* SSL might just return SSL_ERROR_WANT_READ in
                  * re-negotiation.
                  */
-                if (err != SSL_ERROR_NONE && err != SSL_ERROR_WANT_READ)
+                if (err != GNUTLS_E_SUCCESS && err != GNUTLS_E_AGAIN)
                 {
                     /* Reset SSL socket state, then return PJ_FALSE */
                     status = STATUS_FROM_SSL_ERR(ssock, err);
@@ -2154,23 +2181,24 @@ static pj_status_t ssl_write(pj_ssl_sock_t *ssock,
 
     if (nwritten == size) {
         /* All data written, flush write BIO to network socket */
-        status = flush_write_bio(ssock, send_key, size, flags);
+        status = flush_write_bio(ssock, send_key, size, flags, data);
     } else if (nwritten <= 0) {
         /* SSL failed to process the data, it may just that re-negotiation
          * is on progress.
          */
         int err;
-        err = SSL_get_error(ssock->ossl_ssl, nwritten);
-        if (err == SSL_ERROR_WANT_READ || err == SSL_ERROR_NONE) {
+        //err = SSL_get_error(ssock->ossl_ssl, nwritten);
+        //if (err == SSL_ERROR_WANT_READ || err == SSL_ERROR_NONE) {
             /* Re-negotiation is on progress, flush re-negotiation data */
-            status = flush_write_bio(ssock, &ssock->handshake_op_key, 0, 0);
-            if (status == PJ_SUCCESS || status == PJ_EPENDING)
+          //  status = flush_write_bio(ssock, &ssock->handshake_op_key, 0, 0, NULL);
+          //  if (status == PJ_SUCCESS || status == PJ_EPENDING)
                 /* Just return PJ_EBUSY when re-negotiation is on progress */
                 status = PJ_EBUSY;
-        } else {
+
+        //} else {
             /* Some problem occured */
-            status = STATUS_FROM_SSL_ERR(ssock, err);
-        }
+          //  status = STATUS_FROM_SSL_ERR(ssock, err);
+        //}
     } else {
         /* nwritten < *size, shouldn't happen, unless write BIO cannot hold
          * the whole secured data, perhaps because of insufficient memory.
