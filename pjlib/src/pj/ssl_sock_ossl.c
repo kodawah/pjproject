@@ -31,7 +31,7 @@
 #include <pj/timer.h>
 
 
-#define LOG_LEVEL 9
+#define LOG_LEVEL 12
 /* Only build when PJ_HAS_SSL_SOCK is enabled */
 #if defined(PJ_HAS_SSL_SOCK) && PJ_HAS_SSL_SOCK!=0
 
@@ -665,7 +665,7 @@ static void destroy_ssl(pj_ssl_sock_t *ssock)
 {
     /* Destroy SSL instance */
     if (ssock->session) {
-        gnutls_bye(ssock->session, GNUTLS_SHUT_WR);
+        gnutls_bye(ssock->session, GNUTLS_SHUT_RDWR);
         gnutls_deinit(ssock->session);
         ssock->session = NULL;
     }
@@ -847,8 +847,8 @@ static void get_cert_info(pj_pool_t *pool, pj_ssl_cert_info *ci, gnutls_x509_crt
 
     pj_ssl_cert_name_type type;
     if (ci->version >= 3) {
-        /* Get the number of all alternate names so that we can allocate the correct
-         * number of bytes in subj_alt_name */
+        /* Get the number of all alternate names so that we can allocate
+         * the correct number of bytes in subj_alt_name */
         while (gnutls_x509_crt_get_subject_alt_name(cert, seq, buf, &len, NULL) != GNUTLS_E_REQUESTED_DATA_NOT_AVAILABLE)
             seq++;
 
@@ -967,7 +967,7 @@ static pj_bool_t on_handshake_complete(pj_ssl_sock_t *ssock,
             /* Handshake failed in accepting, destroy our self silently. */
 
             char errmsg[PJ_ERR_MSG_SIZE];
-            char buf[PJ_INET6_ADDRSTRLEN+10];
+            char buf[PJ_INET6_ADDRSTRLEN + 10];
 
             pj_strerror(status, errmsg, sizeof(errmsg));
             PJ_LOG(3,(ssock->pool->obj_name, "Handshake failed in accepting "
@@ -1673,7 +1673,7 @@ static pj_bool_t asock_on_accept_complete (pj_activesock_t *asock,
 
     /* Start SSL handshake */
     ssock->ssl_state = SSL_STATE_HANDSHAKING;
-    SSL_set_accept_state(ssock->ossl_ssl);
+    //SSL_set_accept_state(ssock->ossl_ssl);
     status = do_handshake(ssock);
 
 on_return:
