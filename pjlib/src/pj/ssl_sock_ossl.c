@@ -177,6 +177,8 @@ struct pj_ssl_sock_t
     BIO                  *ossl_wbio;
     gnutls_session_t      session;
     gnutls_certificate_credentials_t xcred;
+    void *hack;
+    pj_size_t hacklen;
 };
 
 
@@ -477,8 +479,15 @@ ssize_t data_push(gnutls_transport_ptr_t ptr, const void* data, size_t len)
 ssize_t data_pull(gnutls_transport_ptr_t ptr, void* data, size_t len)
 {
     pj_ssl_sock_t *ssock = (pj_ssl_sock_t *)ptr;
-    pj_sock_recv(ssock->sock, data, &len, 0);
-    return len;
+    pj_size_t size = ssock->hacklen;
+    if (ssock->hack) {
+        data = ssock->hack;
+        ssock->hacklen = 0;
+        return len;
+    } else {
+        pj_sock_recv(ssock->sock, data, &len, 0);
+        return len;
+    }
 }
 
 
@@ -1361,16 +1370,20 @@ static pj_bool_t asock_on_data_read (pj_activesock_t *asock,
                            pj_activesock_get_user_data(asock);
     pj_size_t nwritten;
 
+#if 0
     /* Socket error or closed */
     if (data && size > 0) {
         /* Consume the whole data */
-        nwritten = gnutls_record_send(ssock->session, data, size);
+        //NONONONONONONONONONO
+        //nwritten = gnutls_record_send(ssock->session, data, size);
         //nwritten = BIO_write(ssock->ossl_rbio, data, (int)size);
         if (nwritten < size) {
             status = GET_SSL_STATUS(ssock);
             goto on_error;
         }
     }
+#endif
+
     /* Check if SSL handshake hasn't finished yet */
     if (ssock->ssl_state == SSL_STATE_HANDSHAKING) {
         pj_bool_t ret = PJ_TRUE;
@@ -1397,7 +1410,11 @@ static pj_bool_t asock_on_data_read (pj_activesock_t *asock,
              * is on progress, so let's protect it with write mutex.
              */
             pj_lock_acquire(ssock->write_mutex);
+
+            ssock->hack = data;
+            ssock->hacklen = size;
             err = gnutls_record_recv(ssock->session, data_, size_);
+            ssock->hack = NULL;
             //size_ = SSL_read(ssock->ossl_ssl, data_, size_);
             pj_lock_release(ssock->write_mutex);
             fprintf(stderr, "recv: %s\n", gnutls_strerror(err));
