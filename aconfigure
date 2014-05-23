@@ -7531,13 +7531,13 @@ if test "x$ac_cv_lib_crypto_ERR_load_BIO_strings" = xyes; then :
   libcrypto_present=1 && LIBS="$LIBS -lcrypto"
 fi
 
-		{ $as_echo "$as_me:${as_lineno-$LINENO}: checking for SSL_library_init in -lssl" >&5
-$as_echo_n "checking for SSL_library_init in -lssl... " >&6; }
+		{ $as_echo "$as_me:${as_lineno-$LINENO}: checking for SSL_library_init in -lssl -lgnutls" >&5
+$as_echo_n "checking for SSL_library_init in -lssl -lgnutls... " >&6; }
 if ${ac_cv_lib_ssl_SSL_library_init+:} false; then :
   $as_echo_n "(cached) " >&6
 else
   ac_check_lib_save_LIBS=$LIBS
-LIBS="-lssl  $LIBS"
+LIBS="-lssl -lgnutls $LIBS"
 cat confdefs.h - <<_ACEOF >conftest.$ac_ext
 /* end confdefs.h.  */
 
@@ -7568,7 +7568,7 @@ fi
 { $as_echo "$as_me:${as_lineno-$LINENO}: result: $ac_cv_lib_ssl_SSL_library_init" >&5
 $as_echo "$ac_cv_lib_ssl_SSL_library_init" >&6; }
 if test "x$ac_cv_lib_ssl_SSL_library_init" = xyes; then :
-  libssl_present=1 && LIBS="$LIBS -lssl"
+  libssl_present=1 && LIBS="$LIBS -lssl -lgnutls"
 fi
 
 		if test "x$openssl_h_present" = "x1" -a "x$libssl_present" = "x1" -a "x$libcrypto_present" = "x1"; then
