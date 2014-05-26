@@ -30,6 +30,7 @@
 #include <pj/pool.h>
 #include <pj/string.h>
 #include <pj/timer.h>
+#include <pj/file_io.h>
 
 
 #define LOG_LEVEL 4
@@ -178,6 +179,8 @@ struct pj_ssl_sock_t
     BIO                  *ossl_wbio;
     gnutls_session_t      session;
     gnutls_certificate_credentials_t xcred;
+    gnutls_x509_crt_t     certificate;
+    gnutls_x509_privkey_t private_key;
     void                 *read_buf;
 };
 
@@ -489,6 +492,49 @@ static ssize_t data_pull(gnutls_transport_ptr_t ptr, void *data, size_t len)
     }
 }
 
+static pj_status_t tls_load_file(pj_pool_t *pool, const char *path,
+                                 gnutls_datum_t *dt)
+{
+    pj_oshandle_t fd;
+    ssize_t bytes_read;
+    size_t file_size;
+    pj_status_t status;
+    unsigned int out_len = 0;
+
+    status = pj_file_open(pool, path, PJ_O_RDONLY, &fd);
+    if (status != PJ_SUCCESS) {
+        status = PJ_EINVAL;
+        goto out;
+    }
+
+    pj_file_setpos(fd, 0, PJ_SEEK_END);
+    pj_file_getpos(fd, (pj_off_t *)&file_size);
+    pj_file_setpos(fd, 0, PJ_SEEK_SET);
+
+    dt->data = pj_pool_calloc(pool, file_size, sizeof(uint8_t));
+    if (!dt->data) {
+        fprintf(stderr, "Not enough memory to read file '%s'.", path);
+        status = PJ_ENOMEM;
+        goto out;
+    }
+
+    do {
+        bytes_read = file_size - out_len;
+        status = pj_file_read(fd, &(dt->data[out_len]), &bytes_read);
+        if (bytes_read < 0) {
+            fprintf(stderr, "Failed to read file '%s'.", path);
+            status = PJ_EINVAL;
+            goto out;
+        }
+        out_len += bytes_read;
+    } while ((bytes_read != 0) && (status != PJ_SUCCESS));
+
+    dt->size = out_len;
+    status = PJ_SUCCESS;
+out:
+    pj_file_close(fd);
+    return status;
+}
 
 /* Create and initialize new SSL context and instance */
 static pj_status_t create_ssl(pj_ssl_sock_t *ssock)
@@ -500,7 +546,7 @@ static pj_status_t create_ssl(pj_ssl_sock_t *ssock)
     const char *err;
     SSL_CTX *ctx;
     pj_ssl_cert_t *cert;
-    int mode, rc;
+    int mode, ret;
     pj_status_t status;
 
     pj_assert(ssock);
@@ -543,13 +589,25 @@ static pj_status_t create_ssl(pj_ssl_sock_t *ssock)
         exit(1);
     }
 
+    /* Allocate credentials loading root cert, needed for handshaking */
+    gnutls_certificate_allocate_credentials(&ssock->xcred);
+    gnutls_certificate_set_x509_trust_file(ssock->xcred,
+                                           "/etc/ssl/certs/ca-certificates.crt",
+                                           GNUTLS_X509_FMT_PEM);
+
     /* Apply credentials */
     if (cert) {
         /* Load CA list if one is specified. */
         if (cert->CA_file.slen) {
+            status = gnutls_certificate_set_x509_trust_file(ssock->xcred,
+                                                            cert->CA_file.ptr,
+                                                            GNUTLS_X509_FMT_PEM);
+            if (status < 0) {
+                fprintf(stderr, "Error loading CA list: %s\n", gnutls_strerror(status));
+                return PJ_EINVAL;
+            }
 
-            rc = SSL_CTX_load_verify_locations(ctx, cert->CA_file.ptr, NULL);
-
+#if 0
             if (rc != 1) {
                 status = GET_SSL_STATUS(ssock);
                 PJ_LOG(1,(ssock->pool->obj_name, "Error loading CA list file "
@@ -557,6 +615,7 @@ static pj_status_t create_ssl(pj_ssl_sock_t *ssock)
                 SSL_CTX_free(ctx);
                 return status;
             }
+#endif
         }
 
         /* Set password callback */
@@ -568,7 +627,32 @@ static pj_status_t create_ssl(pj_ssl_sock_t *ssock)
 
         /* Load certificate if one is specified */
         if (cert->cert_file.slen) {
+            gnutls_datum_t dt;
 
+            status = tls_load_file(ssock->pool, cert->cert_file.ptr, &dt);
+            if (status != PJ_SUCCESS) {
+                fprintf(stderr, "Could not read file\n");
+                return PJ_EINVAL;
+            }
+
+            ret = gnutls_x509_crt_init(&ssock->certificate);
+            if (ret != GNUTLS_E_SUCCESS) {
+                fprintf(stderr, "Could not init certificate - %s",
+                        gnutls_strerror(ret));
+                return PJ_EINVAL;
+            }
+
+            ret = gnutls_x509_crt_import(ssock->certificate, &dt,
+                                         GNUTLS_X509_FMT_PEM);
+            if (ret != GNUTLS_E_SUCCESS)
+                ret = gnutls_x509_crt_import(ssock->certificate, &dt,
+                                             GNUTLS_X509_FMT_DER);
+            if (ret != GNUTLS_E_SUCCESS) {
+                fprintf(stderr, "Could not import certificate %s - %s",
+                        cert->cert_file.ptr, gnutls_strerror(ret));
+                return PJ_EINVAL;
+            }
+#if 0
             /* Load certificate chain from file into ctx */
             rc = SSL_CTX_use_certificate_chain_file(ctx, cert->cert_file.ptr);
 
@@ -579,11 +663,31 @@ static pj_status_t create_ssl(pj_ssl_sock_t *ssock)
                 SSL_CTX_free(ctx);
                 return status;
             }
+#endif
         }
 
 
         /* Load private key if one is specified */
         if (cert->privkey_file.slen) {
+            gnutls_datum_t dt;
+
+            gnutls_x509_privkey_init(&ssock->private_key);
+            status = tls_load_file(ssock->pool, cert->privkey_file.ptr, &dt);
+            if (status != PJ_SUCCESS) {
+                fprintf(stderr, "Could not read file\n");
+                return PJ_EINVAL;
+            }
+            ret = gnutls_x509_privkey_import(ssock->private_key, &dt,
+                                         GNUTLS_X509_FMT_PEM);
+            if (ret != GNUTLS_E_SUCCESS)
+                ret = gnutls_x509_crt_import(ssock->private_key, &dt,
+                                             GNUTLS_X509_FMT_DER);
+            if (ret != GNUTLS_E_SUCCESS) {
+                fprintf(stderr, "Could not import private key %s - %s",
+                        cert->privkey_file.ptr, gnutls_strerror(ret));
+                return PJ_EINVAL;
+            }
+#if 0
             /* Adds the first private key found in file to ctx */
             rc = SSL_CTX_use_PrivateKey_file(ctx, cert->privkey_file.ptr,
                                              SSL_FILETYPE_PEM);
@@ -611,6 +715,7 @@ static pj_status_t create_ssl(pj_ssl_sock_t *ssock)
                 }
                 BIO_free(bio);
             }
+#endif
         }
     }
 
@@ -636,11 +741,6 @@ static pj_status_t create_ssl(pj_ssl_sock_t *ssock)
     }
 #endif
 
-    /* Create SSL instance */
-    gnutls_certificate_allocate_credentials(&ssock->xcred);
-    gnutls_certificate_set_x509_trust_file(ssock->xcred,
-                                           "/etc/ssl/certs/ca-certificates.crt",
-                                           GNUTLS_X509_FMT_PEM);
     /* SSL verification options */
     mode = SSL_VERIFY_PEER;
     if (ssock->is_server && ssock->param.require_client_cert)
