@@ -465,7 +465,7 @@ fail:
 /* Setting SSL sock cipher list */
 static pj_status_t set_cipher_list(pj_ssl_sock_t *ssock);
 
-ssize_t data_push(gnutls_transport_ptr_t ptr, const void* data, size_t len)
+ssize_t data_push(gnutls_transport_ptr_t ptr, const void *data, size_t len)
 {
     pj_ioqueue_op_key_t send_key;
     pj_ssl_sock_t *ssock = (pj_ssl_sock_t *)ptr;
@@ -476,13 +476,14 @@ ssize_t data_push(gnutls_transport_ptr_t ptr, const void* data, size_t len)
 // GnuTLS calls this function to receive data from the transport layer. We set
 // this callback with gnutls_transport_set_pull_function(). It should act like
 // recv() (see the manual for specifics).
-ssize_t data_pull(gnutls_transport_ptr_t ptr, void* data, size_t len)
+ssize_t data_pull(gnutls_transport_ptr_t ptr, void *data, size_t len)
 {
     pj_ssl_sock_t *ssock = (pj_ssl_sock_t *)ptr;
     pj_size_t size = ssock->hacklen;
     if (ssock->hack) {
-        data = ssock->hack;
-        ssock->hacklen = 0;
+        memcpy(data, ssock->hack, len);
+        ssock->hack = &ssock->hack[len];
+        ssock->hacklen -= len;
         return len;
     } else {
         pj_sock_recv(ssock->sock, data, &len, 0);
@@ -1337,7 +1338,8 @@ static pj_status_t do_handshake(pj_ssl_sock_t *ssock)
     /* Perform SSL handshake */
     //pj_lock_acquire(ssock->write_mutex);
     do {
-         err = gnutls_handshake(ssock->session);
+        err = gnutls_handshake(ssock->session);
+        fprintf(stderr, "error during handshake. %s\n", gnutls_strerror(err));
     } while (err != 0 && !gnutls_error_is_fatal(err));
 
     if (err == GNUTLS_E_SUCCESS) {
@@ -1401,9 +1403,9 @@ static pj_bool_t asock_on_data_read (pj_activesock_t *asock,
     /* See if there is any decrypted data for the application */
     if (ssock->read_started) {
         do {
-            read_data_t *buf = *(OFFSET_OF_READ_DATA_PTR(ssock, data));
-            void *data_ = (pj_int8_t*)buf->data + buf->len;
-            int size_ = (int)(ssock->read_size - buf->len);
+            read_data_t *buf;// = *(OFFSET_OF_READ_DATA_PTR(ssock, data));
+            int data_[512] = {0};// = (pj_int8_t*)buf->data + buf->len;
+            int size_;// = (int)(ssock->read_size - buf->len);
             int err;
 
             /* SSL_read() may write some data to BIO write when re-negotiation
@@ -1413,22 +1415,22 @@ static pj_bool_t asock_on_data_read (pj_activesock_t *asock,
 
             ssock->hack = data;
             ssock->hacklen = size;
-            err = gnutls_record_recv(ssock->session, data_, size_);
+            err = gnutls_record_recv(ssock->session, data_, size);
             ssock->hack = NULL;
             //size_ = SSL_read(ssock->ossl_ssl, data_, size_);
             pj_lock_release(ssock->write_mutex);
-            fprintf(stderr, "recv: %s\n", gnutls_strerror(err));
+            fprintf(stderr, "recv: (%d) %s\n", err, gnutls_strerror(err));
 
             if (err > 0 || status != PJ_SUCCESS) {
                 if (ssock->param.cb.on_data_read) {
                     pj_bool_t ret;
                     pj_size_t remainder_ = 0;
 
-                    if (size_ > 0)
-                        buf->len += err;
+                    //if (size_ > 0)
+                      //  buf->len += err;
 
-                    ret = (*ssock->param.cb.on_data_read)(ssock, buf->data,
-                                                          buf->len, status,
+                    ret = (*ssock->param.cb.on_data_read)(ssock, data_,
+                                                          err, PJ_EEOF,
                                                           &remainder_);
                     if (!ret) {
                         /* We've been destroyed */
@@ -1438,7 +1440,7 @@ static pj_bool_t asock_on_data_read (pj_activesock_t *asock,
                     /* Application may have left some data to be consumed
                      * later.
                      */
-                    buf->len = remainder_;
+                    //buf->len = remainder_;
                 }
 
                 /* Active socket signalled connection closed/error, this has
@@ -1449,7 +1451,7 @@ static pj_bool_t asock_on_data_read (pj_activesock_t *asock,
                     reset_ssl_sock_state(ssock);
                     return PJ_FALSE;
                 }
-
+return PJ_TRUE;
             } else {
 
                 //int err = SSL_get_error(ssock->ossl_ssl, (int)size);
