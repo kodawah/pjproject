@@ -33,7 +33,7 @@
 #include <pj/file_io.h>
 
 
-#define LOG_LEVEL 4
+#define LOG_LEVEL 1
 /* Only build when PJ_HAS_SSL_SOCK is enabled */
 #if defined(PJ_HAS_SSL_SOCK) && PJ_HAS_SSL_SOCK!=0
 
@@ -1440,7 +1440,7 @@ static pj_status_t do_handshake(pj_ssl_sock_t *ssock)
     //pj_lock_acquire(ssock->write_mutex);
     do {
         err = gnutls_handshake(ssock->session);
-        fprintf(stderr, "error during handshake. %s\n", gnutls_strerror(err));
+        //fprintf(stderr, "error during handshake. %s\n", gnutls_strerror(err));
     } while (err != 0 && !gnutls_error_is_fatal(err));
 
     if (err == GNUTLS_E_SUCCESS) {
