@@ -177,8 +177,7 @@ struct pj_ssl_sock_t
     BIO                  *ossl_wbio;
     gnutls_session_t      session;
     gnutls_certificate_credentials_t xcred;
-    void *hack;
-    pj_size_t hacklen;
+    void                 *read_buf;
 };
 
 
@@ -326,7 +325,9 @@ static pj_status_t init_openssl(void)
 
         for (i = 0; ; i++) {
             unsigned char id[2];
-            const char *suite = gnutls_cipher_suite_info(i, (char *)id, NULL, NULL, NULL, NULL);
+            const unsigned char *suite = gnutls_cipher_suite_info(i, (char *)id,
+                                                                  NULL, NULL,
+                                                                  NULL, NULL);
             openssl_ciphers[i].id = 0;
             if (suite != NULL && i < PJ_ARRAY_SIZE(openssl_ciphers)) {
                 openssl_ciphers[i].id = (pj_ssl_cipher)
@@ -467,7 +468,6 @@ static pj_status_t set_cipher_list(pj_ssl_sock_t *ssock);
 
 ssize_t data_push(gnutls_transport_ptr_t ptr, const void *data, size_t len)
 {
-    pj_ioqueue_op_key_t send_key;
     pj_ssl_sock_t *ssock = (pj_ssl_sock_t *)ptr;
     pj_sock_send(ssock->sock, data, &len, 0);
     return len;
@@ -479,11 +479,9 @@ ssize_t data_push(gnutls_transport_ptr_t ptr, const void *data, size_t len)
 ssize_t data_pull(gnutls_transport_ptr_t ptr, void *data, size_t len)
 {
     pj_ssl_sock_t *ssock = (pj_ssl_sock_t *)ptr;
-    pj_size_t size = ssock->hacklen;
-    if (ssock->hack) {
-        memcpy(data, ssock->hack, len);
-        ssock->hack = &ssock->hack[len];
-        ssock->hacklen -= len;
+    if (ssock->read_buf) {
+        memcpy(data, ssock->read_buf, len);
+        ssock->read_buf += len;
         return len;
     } else {
         pj_sock_recv(ssock->sock, data, &len, 0);
@@ -1376,8 +1374,6 @@ static pj_bool_t asock_on_data_read (pj_activesock_t *asock,
     /* Socket error or closed */
     if (data && size > 0) {
         /* Consume the whole data */
-        //NONONONONONONONONONO
-        //nwritten = gnutls_record_send(ssock->session, data, size);
         //nwritten = BIO_write(ssock->ossl_rbio, data, (int)size);
         if (nwritten < size) {
             status = GET_SSL_STATUS(ssock);
@@ -1401,103 +1397,77 @@ static pj_bool_t asock_on_data_read (pj_activesock_t *asock,
     }
 
     /* See if there is any decrypted data for the application */
-    if (ssock->read_started) {
-        do {
-            read_data_t *buf;// = *(OFFSET_OF_READ_DATA_PTR(ssock, data));
-            int data_[512] = {0};// = (pj_int8_t*)buf->data + buf->len;
-            int size_;// = (int)(ssock->read_size - buf->len);
-            int err;
+    if (data && size > 0 && ssock->read_started) {
+        int decoded_size;
+        void *decoded_data = (void *)pj_pool_calloc(ssock->pool, size, 1);
 
-            /* SSL_read() may write some data to BIO write when re-negotiation
-             * is on progress, so let's protect it with write mutex.
-             */
-            pj_lock_acquire(ssock->write_mutex);
+        /* Save the encrypted data and let data_pull deal with it */
+        ssock->read_buf = data;
+        decoded_size = gnutls_record_recv(ssock->session, decoded_data, size);
+        ssock->read_buf = NULL;
 
-            ssock->hack = data;
-            ssock->hacklen = size;
-            err = gnutls_record_recv(ssock->session, data_, size);
-            ssock->hack = NULL;
-            //size_ = SSL_read(ssock->ossl_ssl, data_, size_);
-            pj_lock_release(ssock->write_mutex);
-            fprintf(stderr, "recv: (%d) %s\n", err, gnutls_strerror(err));
+        if (decoded_size > 0 || status != PJ_SUCCESS) {
+            if (ssock->param.cb.on_data_read) {
+                pj_bool_t ret;
+                pj_size_t remainder_ = 0;
 
-            if (err > 0 || status != PJ_SUCCESS) {
-                if (ssock->param.cb.on_data_read) {
-                    pj_bool_t ret;
-                    pj_size_t remainder_ = 0;
-
-                    //if (size_ > 0)
-                      //  buf->len += err;
-
-                    ret = (*ssock->param.cb.on_data_read)(ssock, data_,
-                                                          err, PJ_EEOF,
-                                                          &remainder_);
-                    if (!ret) {
-                        /* We've been destroyed */
-                        return PJ_FALSE;
-                    }
-
-                    /* Application may have left some data to be consumed
-                     * later.
-                     */
-                    //buf->len = remainder_;
-                }
-
-                /* Active socket signalled connection closed/error, this has
-                 * been signalled to the application along with any remaining
-                 * buffer. So, let's just reset SSL socket now.
-                 */
-                if (status != PJ_SUCCESS) {
-                    reset_ssl_sock_state(ssock);
+                // PJ_EEOF because we always read all data received
+                ret = (*ssock->param.cb.on_data_read)(ssock,
+                                                      decoded_data,
+                                                      decoded_size,
+                                                      PJ_EEOF,
+                                                      &remainder_);
+                if (!ret) {
+                    /* We've been destroyed */
                     return PJ_FALSE;
                 }
-return PJ_TRUE;
-            } else {
-
-                //int err = SSL_get_error(ssock->ossl_ssl, (int)size);
-
-                /* SSL might just return SSL_ERROR_WANT_READ in
-                 * re-negotiation.
-                 */
-                if (err != GNUTLS_E_SUCCESS && err != GNUTLS_E_AGAIN)
-                {
-                    /* Reset SSL socket state, then return PJ_FALSE */
-                    status = STATUS_FROM_SSL_ERR(ssock, err);
-                    reset_ssl_sock_state(ssock);
-                    goto on_error;
-                }
-
-                status = do_handshake(ssock);
-                if (status == PJ_SUCCESS) {
-                    /* Renegotiation completed */
-
-                    /* Update certificates */
-                    update_certs_info(ssock);
-
-                    // Ticket #1573: Don't hold mutex while calling
-                    //               PJLIB socket send().
-                    //pj_lock_acquire(ssock->write_mutex);
-                    status = flush_delayed_send(ssock);
-                    //pj_lock_release(ssock->write_mutex);
-
-                    /* If flushing is ongoing, treat it as success */
-                    if (status == PJ_EBUSY)
-                        status = PJ_SUCCESS;
-
-                    if (status != PJ_SUCCESS && status != PJ_EPENDING) {
-                        PJ_PERROR(1,(ssock->pool->obj_name, status,
-                                     "Failed to flush delayed send"));
-                        goto on_error;
-                    }
-                } else if (status != PJ_EPENDING) {
-                    PJ_PERROR(1,(ssock->pool->obj_name, status,
-                                 "Renegotiation failed"));
-                    goto on_error;
-                }
-
-                break;
             }
-        } while (1);
+
+            /* Active socket signalled connection closed/error, this has
+             * been signalled to the application along with any remaining
+             * buffer. So, let's just reset SSL socket now.  */
+            if (status != PJ_SUCCESS) {
+                reset_ssl_sock_state(ssock);
+                return PJ_FALSE;
+            }
+
+            return PJ_TRUE;
+        } else {
+            /* SSL might just return SSL_ERROR_WANT_READ in
+             * re-negotiation.  */
+            if (decoded_size != GNUTLS_E_SUCCESS &&
+                decoded_size != GNUTLS_E_AGAIN) {
+                /* Reset SSL socket state, then return PJ_FALSE */
+                reset_ssl_sock_state(ssock);
+                goto on_error;
+            }
+
+            /* Let's try renegotiating */
+            status = do_handshake(ssock);
+            if (status == PJ_SUCCESS) {
+                /* Update certificates */
+                update_certs_info(ssock);
+                /* Flush any data left in our buffers */
+                status = flush_delayed_send(ssock);
+
+                /* If flushing is ongoing, treat it as success */
+                if (status == PJ_EBUSY)
+                    status = PJ_SUCCESS;
+
+                if (status != PJ_SUCCESS && status != PJ_EPENDING) {
+                    PJ_PERROR(1, (ssock->pool->obj_name, status,
+                                  "Failed to flush delayed send"));
+                    goto on_error;
+                }
+            } else if (status != PJ_EPENDING) {
+                PJ_PERROR(1, (ssock->pool->obj_name,
+                              status, "Renegotiation failed"));
+                goto on_error;
+            }
+
+            return PJ_FALSE;
+        }
+
     }
 
     return PJ_TRUE;
@@ -1955,7 +1925,7 @@ PJ_DEF(pj_status_t) pj_ssl_sock_create (pj_pool_t *pool,
 
     /* Init secure socket param */
     ssock->param = *param;
-    ssock->param.read_buffer_size = ((ssock->param.read_buffer_size+7)>>3)<<3;
+    ssock->param.read_buffer_size = ((ssock->param.read_buffer_size + 7) >> 3) << 3;
     if (param->ciphers_num > 0) {
         unsigned i;
         ssock->param.ciphers = (pj_ssl_cipher*)
