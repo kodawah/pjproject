@@ -465,7 +465,7 @@ fail:
 /* Setting SSL sock cipher list */
 static pj_status_t set_cipher_list(pj_ssl_sock_t *ssock);
 
-ssize_t data_push(gnutls_transport_ptr_t ptr, const void *data, size_t len)
+static ssize_t data_push(gnutls_transport_ptr_t ptr, const void *data, size_t len)
 {
     pj_ssl_sock_t *ssock = (pj_ssl_sock_t *)ptr;
     pj_sock_send(ssock->sock, data, (pj_ssize_t *)&len, 0);
@@ -475,7 +475,7 @@ ssize_t data_push(gnutls_transport_ptr_t ptr, const void *data, size_t len)
 // GnuTLS calls this function to receive data from the transport layer. We set
 // this callback with gnutls_transport_set_pull_function(). It should act like
 // recv() (see the manual for specifics).
-ssize_t data_pull(gnutls_transport_ptr_t ptr, void *data, size_t len)
+static ssize_t data_pull(gnutls_transport_ptr_t ptr, void *data, size_t len)
 {
     pj_ssl_sock_t *ssock = (pj_ssl_sock_t *)ptr;
     if (ssock->read_buf) {
