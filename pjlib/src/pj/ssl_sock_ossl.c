@@ -16,6 +16,7 @@
  * along with this program; if not, write to the Free Software
  * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
  */
+
 #include <pj/ssl_sock.h>
 #include <pj/activesock.h>
 #include <pj/compat/socket.h>
@@ -508,7 +509,7 @@ static pj_status_t create_ssl(pj_ssl_sock_t *ssock)
 
     /* Make sure OpenSSL library has been initialized */
     init_openssl();
-    gnutls_init(&ssock->session, GNUTLS_CLIENT);
+    gnutls_init(&ssock->session, ssock->is_server ? GNUTLS_SERVER : GNUTLS_CLIENT);
 
     /* Set SSL sock as application data of SSL instance */
     gnutls_transport_set_ptr(ssock->session, (gnutls_transport_ptr_t) (uintptr_t) ssock);
