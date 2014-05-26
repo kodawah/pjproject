@@ -1351,15 +1351,15 @@ static int ossl_test_send_buf()
 
 int ssl_sock_test(void)
 {
-    int ret = 0;
+    int ret;
 
     PJ_LOG(3,("", "..test ossl send buf"));
-    //ret = ossl_test_send_buf();
+    ret = ossl_test_send_buf();
     if (ret != 0)
 	return ret;
 
     PJ_LOG(3,("", "..get cipher list test"));
-    //ret = get_cipher_list();
+    ret = get_cipher_list();
     if (ret != 0)
 	return ret;
 
