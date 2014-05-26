@@ -31,7 +31,7 @@
 #include <pj/timer.h>
 
 
-#define LOG_LEVEL 12
+#define LOG_LEVEL 4
 /* Only build when PJ_HAS_SSL_SOCK is enabled */
 #if defined(PJ_HAS_SSL_SOCK) && PJ_HAS_SSL_SOCK!=0
 
@@ -193,7 +193,7 @@ struct pj_ssl_cert_t
 };
 
 
-static write_data_t* alloc_send_data(pj_ssl_sock_t *ssock, pj_size_t len);
+//static write_data_t* alloc_send_data(pj_ssl_sock_t *ssock, pj_size_t len);
 static void free_send_data(pj_ssl_sock_t *ssock, write_data_t *wdata);
 static pj_status_t flush_delayed_send(pj_ssl_sock_t *ssock);
 
@@ -325,9 +325,8 @@ static pj_status_t init_openssl(void)
 
         for (i = 0; ; i++) {
             unsigned char id[2];
-            const unsigned char *suite = gnutls_cipher_suite_info(i, (char *)id,
-                                                                  NULL, NULL,
-                                                                  NULL, NULL);
+            const char *suite = gnutls_cipher_suite_info(i, (unsigned char *)id,
+                                                         NULL, NULL, NULL, NULL);
             openssl_ciphers[i].id = 0;
             if (suite != NULL && i < PJ_ARRAY_SIZE(openssl_ciphers)) {
                 openssl_ciphers[i].id = (pj_ssl_cipher)
@@ -469,7 +468,7 @@ static pj_status_t set_cipher_list(pj_ssl_sock_t *ssock);
 ssize_t data_push(gnutls_transport_ptr_t ptr, const void *data, size_t len)
 {
     pj_ssl_sock_t *ssock = (pj_ssl_sock_t *)ptr;
-    pj_sock_send(ssock->sock, data, &len, 0);
+    pj_sock_send(ssock->sock, data, (pj_ssize_t *)&len, 0);
     return len;
 }
 
@@ -484,7 +483,7 @@ ssize_t data_pull(gnutls_transport_ptr_t ptr, void *data, size_t len)
         ssock->read_buf += len;
         return len;
     } else {
-        pj_sock_recv(ssock->sock, data, &len, 0);
+        pj_sock_recv(ssock->sock, data, (pj_ssize_t *)&len, 0);
         return len;
     }
 }
@@ -1042,6 +1041,7 @@ static pj_bool_t on_handshake_complete(pj_ssl_sock_t *ssock,
     return PJ_TRUE;
 }
 
+#if 0
 static write_data_t* alloc_send_data(pj_ssl_sock_t *ssock, pj_size_t len)
 {
     send_buf_t *send_buf = &ssock->send_buf;
@@ -1105,6 +1105,7 @@ init_send_data:
 
     return p;
 }
+#endif
 
 static void free_send_data(pj_ssl_sock_t *ssock, write_data_t *wdata)
 {
@@ -1215,6 +1216,7 @@ pj_status_t pj_ssl_sock_ossl_test_send_buf(pj_pool_t *pool)
 #endif
 
 
+#if 0
 /* Flush write BIO to network socket. Note that any access to write BIO
  * MUST be serialized, so mutex protection must cover any call to OpenSSL
  * API (that possibly generate data for write BIO) along with the call to
@@ -1300,7 +1302,7 @@ return PJ_SUCCESS;
 
     return status;
 }
-
+#endif
 
 static void on_timer(pj_timer_heap_t *th, struct pj_timer_entry *te)
 {
@@ -1368,9 +1370,9 @@ static pj_bool_t asock_on_data_read (pj_activesock_t *asock,
 {
     pj_ssl_sock_t *ssock = (pj_ssl_sock_t*)
                            pj_activesock_get_user_data(asock);
+#if 0
     pj_size_t nwritten;
 
-#if 0
     /* Socket error or closed */
     if (data && size > 0) {
         /* Consume the whole data */
@@ -2091,7 +2093,7 @@ PJ_DEF(pj_status_t) pj_ssl_sock_start_read2 (pj_ssl_sock_t *ssock,
                                                sizeof(read_data_t));
 
     /* Store SSL socket read buffer pointer in the activesock read buffer */
-    for (i=0; i<ssock->param.async_cnt; ++i) {
+    for (i = 0; i < ssock->param.async_cnt; ++i) {
         read_data_t **p_ssock_rbuf =
                         OFFSET_OF_READ_DATA_PTR(ssock, ssock->asock_rbuf[i]);
 
@@ -2170,12 +2172,13 @@ static pj_status_t ssl_write(pj_ssl_sock_t *ssock,
 
     if (nwritten == size) {
         /* All data written, flush write BIO to network socket */
-        status = flush_write_bio(ssock, send_key, size, flags, data);
+        //status = flush_write_bio(ssock, send_key, size, flags, data);
+        status = PJ_SUCCESS;
     } else if (nwritten <= 0) {
         /* SSL failed to process the data, it may just that re-negotiation
          * is on progress.
          */
-        int err;
+        //int err;
         //err = SSL_get_error(ssock->ossl_ssl, nwritten);
         //if (err == SSL_ERROR_WANT_READ || err == SSL_ERROR_NONE) {
             /* Re-negotiation is on progress, flush re-negotiation data */
