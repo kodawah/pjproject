@@ -466,8 +466,6 @@ fail:
     return 0;
 }
 
-/* Setting SSL sock cipher list */
-static pj_status_t set_cipher_list(pj_ssl_sock_t *ssock);
 
 static ssize_t data_push(gnutls_transport_ptr_t ptr, const void *data, size_t len)
 {
@@ -536,14 +534,129 @@ out:
     return status;
 }
 
+static pj_status_t tls_str_append_once(pj_str_t *dst, pj_str_t *src)
+{
+    if (pj_strstr(dst, src) == NULL) {
+        /* Check buffer size */
+        if (dst->slen + src->slen + 3 > 1024) {
+            pj_assert(!"Insufficient temporary buffer for cipher");
+            return PJ_ETOOMANY;
+        }
+        pj_strcat2(dst, ":+");
+        pj_strcat(dst, src);
+    }
+    return PJ_SUCCESS;
+}
+
+/* Generate cipher list with user preference order in OpenSSL format */
+static pj_status_t tls_priorities_set(pj_ssl_sock_t *ssock)
+{
+    char buf[1024];
+    pj_str_t cipher_list;
+    pj_str_t compression = pj_str("COMP-NULL");
+    int i, j, status;
+    const char *priority;
+    const char *err;
+
+    pj_strset(&cipher_list, buf, 0);
+
+    /* default choice */
+    if (ssock->param.ciphers_num == 0) {
+        switch (ssock->param.proto) {
+        case PJ_SSL_SOCK_PROTO_DEFAULT:
+        case PJ_SSL_SOCK_PROTO_TLS1:
+            priority = "SECURE256:-VERS-SSL3.0";
+            break;
+        case PJ_SSL_SOCK_PROTO_SSL3:
+            priority = "SECURE256";
+            break;
+        case PJ_SSL_SOCK_PROTO_SSL23:
+            priority = "NORMAL";
+            break;
+        default:
+            return PJ_ENOTSUP;
+        }
+    } else
+        priority = "NONE";
+
+    pj_strcat2(&cipher_list, priority);
+    for (i = 0; i < ssock->param.ciphers_num; i++) {
+        for (j = 0; ; j++) {
+            pj_ssl_cipher c;
+            const char *suite;
+            unsigned char id[2];
+            gnutls_protocol_t proto;
+            gnutls_kx_algorithm_t kx;
+            gnutls_mac_algorithm_t mac;
+            gnutls_cipher_algorithm_t algo;
+
+            suite = gnutls_cipher_suite_info(j, (unsigned char *)id,
+                                             &kx, &algo, &mac, &proto);
+            if (suite == NULL)
+                break;
+
+            c = (pj_ssl_cipher) (pj_uint32_t) ((id[0] << 8) | id[1]);
+            if (ssock->param.ciphers[i] == c) {
+                char temp[256];
+                pj_str_t cipher_entry;
+
+                pj_strset(&cipher_entry, temp, 0);
+                pj_strcat2(&cipher_entry, "VERS-");
+                pj_strcat2(&cipher_entry, gnutls_protocol_get_name(proto));
+                status = tls_str_append_once(&cipher_list, &cipher_entry);
+                if (status != PJ_SUCCESS)
+                    return status;
+
+                pj_strset(&cipher_entry, temp, 0);
+                pj_strcat2(&cipher_entry, gnutls_cipher_get_name(algo));
+                tls_str_append_once(&cipher_list, &cipher_entry);
+                if (status != PJ_SUCCESS)
+                    return status;
+
+                pj_strset(&cipher_entry, temp, 0);
+                pj_strcat2(&cipher_entry, gnutls_mac_get_name(mac));
+                tls_str_append_once(&cipher_list, &cipher_entry);
+                if (status != PJ_SUCCESS)
+                    return status;
+
+                pj_strset(&cipher_entry, temp, 0);
+                pj_strcat2(&cipher_entry, gnutls_kx_get_name(kx));
+                tls_str_append_once(&cipher_list, &cipher_entry);
+                if (status != PJ_SUCCESS)
+                    return status;
+
+                break;
+            }
+        }
+    }
+
+    /* disable compression, it's a TLS extension only after all */
+    tls_str_append_once(&cipher_list, &compression);
+
+    /* end the string */
+    cipher_list.ptr[cipher_list.slen] = '\0';
+
+    /* set our priority string */
+    status = gnutls_priority_set_direct(ssock->session,
+                                        cipher_list.ptr, &err);
+    if (status < 0) {
+        fprintf(stderr, "tried string: %s\n", cipher_list.ptr);
+        if (status == GNUTLS_E_INVALID_REQUEST)
+            fprintf(stderr, "Syntax error at: %s\n", err);
+        return status;
+    }
+
+    return PJ_SUCCESS;
+}
+
+
+
 /* Create and initialize new SSL context and instance */
 static pj_status_t create_ssl(pj_ssl_sock_t *ssock)
 {
     BIO *bio;
     DH *dh;
     long options;
-    const char *priority;
-    const char *err;
     SSL_CTX *ctx;
     pj_ssl_cert_t *cert;
     int mode, ret;
@@ -568,25 +681,11 @@ static pj_status_t create_ssl(pj_ssl_sock_t *ssock)
     gnutls_transport_set_pull_function(ssock->session, data_pull);
 
     /* Determine SSL method to use */
-    switch (ssock->param.proto) {
-    case PJ_SSL_SOCK_PROTO_DEFAULT:
-    case PJ_SSL_SOCK_PROTO_TLS1:
-        priority = "SECURE256:!VERS-SSL3.0";
-        break;
-    case PJ_SSL_SOCK_PROTO_SSL3:
-        priority = "SECURE256";
-        break;
-    case PJ_SSL_SOCK_PROTO_SSL23:
-        priority = "NORMAL";
-        break;
-    default:
-        return PJ_EINVAL;
-    }
-    status = gnutls_priority_set_direct(ssock->session, priority, &err);
-    if (status < 0) {
-        if (status == GNUTLS_E_INVALID_REQUEST)
-            fprintf(stderr, "Syntax error at: %s\n", err);
-        exit(1);
+
+    status = tls_priorities_set(ssock);
+    if (status != PJ_SUCCESS) {
+        fprintf(stderr, "Error setting priorities: %s\n", gnutls_strerror(status));
+        return status;
     }
 
     /* Allocate credentials loading root cert, needed for handshaking */
@@ -750,10 +849,6 @@ static pj_status_t create_ssl(pj_ssl_sock_t *ssock)
 
     gnutls_credentials_set(ssock->session, GNUTLS_CRD_CERTIFICATE, ssock->xcred);
 
-    /* Set cipher list */
-    status = set_cipher_list(ssock);
-    if (status != PJ_SUCCESS)
-        return status;
 
 #if 0
     /* Setup SSL BIOs */
@@ -815,66 +910,6 @@ static void reset_ssl_sock_state(pj_ssl_sock_t *ssock)
      * For now, just clear thread error queue here.
      */
     //ERR_clear_error();
-}
-
-
-/* Generate cipher list with user preference order in OpenSSL format */
-static pj_status_t set_cipher_list(pj_ssl_sock_t *ssock)
-{
-    char buf[1024];
-    pj_str_t cipher_list;
-    STACK_OF(SSL_CIPHER) *sk_cipher;
-    unsigned i;
-    int j, ret;
-
-    if (ssock->param.ciphers_num == 0)
-        return PJ_SUCCESS;
-
-    pj_strset(&cipher_list, buf, 0);
-
-    /* Set SSL with ALL available ciphers */
-    SSL_set_cipher_list(ssock->ossl_ssl, "ALL");
-
-    /* Generate user specified cipher list in OpenSSL format */
-    sk_cipher = SSL_get_ciphers(ssock->ossl_ssl);
-    for (i = 0; i < ssock->param.ciphers_num; ++i) {
-        for (j = 0; j < sk_SSL_CIPHER_num(sk_cipher); ++j) {
-            SSL_CIPHER *c;
-            c = sk_SSL_CIPHER_value(sk_cipher, j);
-            if (ssock->param.ciphers[i] == (pj_ssl_cipher)
-                                           ((pj_uint32_t)c->id & 0x00FFFFFF))
-            {
-                const char *c_name;
-
-                c_name = SSL_CIPHER_get_name(c);
-
-                /* Check buffer size */
-                if (cipher_list.slen + pj_ansi_strlen(c_name) + 2 > sizeof(buf)) {
-                    pj_assert(!"Insufficient temporary buffer for cipher");
-                    return PJ_ETOOMANY;
-                }
-
-                /* Add colon separator */
-                if (cipher_list.slen)
-                    pj_strcat2(&cipher_list, ":");
-
-                /* Add the cipher */
-                pj_strcat2(&cipher_list, c_name);
-                break;
-            }
-        }
-    }
-
-    /* Put NULL termination in the generated cipher list */
-    cipher_list.ptr[cipher_list.slen] = '\0';
-
-    /* Finally, set chosen cipher list */
-    ret = SSL_set_cipher_list(ssock->ossl_ssl, buf);
-    if (ret < 1) {
-        return GET_SSL_STATUS(ssock);
-    }
-
-    return PJ_SUCCESS;
 }
 
 
