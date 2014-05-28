@@ -179,8 +179,6 @@ struct pj_ssl_sock_t
     BIO                  *ossl_wbio;
     gnutls_session_t      session;
     gnutls_certificate_credentials_t xcred;
-    gnutls_x509_crt_t     certificate;
-    gnutls_x509_privkey_t private_key;
     void                 *read_buf;
     int read_buflen;
 
@@ -354,21 +352,6 @@ static void shutdown_openssl(void)
 
 
 /* SSL password callback. */
-static int password_cb(char *buf, int num, int rwflag, void *user_data)
-{
-    pj_ssl_cert_t *cert = (pj_ssl_cert_t*) user_data;
-
-    PJ_UNUSED_ARG(rwflag);
-
-    if(num < cert->privkey_pass.slen)
-        return 0;
-
-    pj_memcpy(buf, cert->privkey_pass.ptr, cert->privkey_pass.slen);
-    return (int)cert->privkey_pass.slen;
-}
-
-
-/* SSL password callback. */
 static int verify_callback(gnutls_session_t session)
 {
     pj_ssl_sock_t *ssock;
@@ -488,6 +471,7 @@ static ssize_t data_pull(gnutls_transport_ptr_t ptr, void *data, size_t len)
     }
 }
 
+#if 0
 static pj_status_t tls_load_file(pj_pool_t *pool, const char *path,
                                  gnutls_datum_t *dt)
 {
@@ -531,6 +515,7 @@ out:
     pj_file_close(fd);
     return status;
 }
+#endif
 
 static pj_status_t tls_str_append_once(pj_str_t *dst, pj_str_t *src)
 {
@@ -662,12 +647,8 @@ static pj_status_t tls_priorities_set(pj_ssl_sock_t *ssock)
 /* Create and initialize new SSL context and instance */
 static pj_status_t create_ssl(pj_ssl_sock_t *ssock)
 {
-    BIO *bio;
-    DH *dh;
-    long options;
-    SSL_CTX *ctx;
     pj_ssl_cert_t *cert;
-    int mode, ret;
+    int ret;
     pj_status_t status;
 
     pj_assert(ssock);
@@ -694,7 +675,6 @@ static pj_status_t create_ssl(pj_ssl_sock_t *ssock)
     gnutls_transport_set_pull_function(ssock->session, data_pull);
 
     /* Determine SSL method to use */
-
     status = tls_priorities_set(ssock);
     if (status != PJ_SUCCESS) {
         fprintf(stderr, "Error setting priorities: %s\n", gnutls_strerror(status));
@@ -716,122 +696,46 @@ static pj_status_t create_ssl(pj_ssl_sock_t *ssock)
             status = gnutls_certificate_set_x509_trust_file(ssock->xcred,
                                                             cert->CA_file.ptr,
                                                             GNUTLS_X509_FMT_PEM);
+            if (status < 0)
+                status = gnutls_certificate_set_x509_trust_file(ssock->xcred,
+                                                                cert->CA_file.ptr,
+                                                                GNUTLS_X509_FMT_DER);
             if (status < 0) {
                 fprintf(stderr, "Error loading CA list: %s\n", gnutls_strerror(status));
                 return PJ_EINVAL;
             }
-
-#if 0
-            if (rc != 1) {
-                status = GET_SSL_STATUS(ssock);
-                PJ_LOG(1,(ssock->pool->obj_name, "Error loading CA list file "
-                          "'%s'", cert->CA_file.ptr));
-                SSL_CTX_free(ctx);
-                return status;
-            }
-#endif
         }
-
-        /* Set password callback */
-        if (cert->privkey_pass.slen) {
-            SSL_CTX_set_default_passwd_cb(ctx, password_cb);
-            SSL_CTX_set_default_passwd_cb_userdata(ctx, cert);
-        }
-
 
         /* Load certificate if one is specified */
         if (cert->cert_file.slen) {
-            gnutls_datum_t dt;
-
-            status = tls_load_file(ssock->pool, cert->cert_file.ptr, &dt);
-            if (status != PJ_SUCCESS) {
-                fprintf(stderr, "Could not read file\n");
-                return PJ_EINVAL;
-            }
-
-            ret = gnutls_x509_crt_init(&ssock->certificate);
+            ret = gnutls_certificate_set_x509_key_file2(ssock->xcred,
+                                                        cert->cert_file.ptr,
+                                                        cert->privkey_file.slen ? cert->privkey_file.ptr
+                                                                                : NULL,
+                                                        GNUTLS_X509_FMT_PEM,
+                                                        (cert->privkey_file.slen &&
+                                                        cert->privkey_pass.slen) ? cert->privkey_pass.ptr
+                                                                                 : NULL,
+                                                        0);
+            if (ret != GNUTLS_E_SUCCESS)
+                ret = gnutls_certificate_set_x509_key_file2(ssock->xcred,
+                                                            cert->cert_file.ptr,
+                                                            cert->privkey_file.slen ? cert->privkey_file.ptr
+                                                                                    : NULL,
+                                                            GNUTLS_X509_FMT_DER,
+                                                            (cert->privkey_file.slen &&
+                                                            cert->privkey_pass.slen) ? cert->privkey_pass.ptr
+                                                                                     : NULL,
+                                                            0);
             if (ret != GNUTLS_E_SUCCESS) {
-                fprintf(stderr, "Could not init certificate - %s",
+                fprintf(stderr, "Could not import cert/key/pass - %s\n",
                         gnutls_strerror(ret));
                 return PJ_EINVAL;
             }
-
-            ret = gnutls_x509_crt_import(ssock->certificate, &dt,
-                                         GNUTLS_X509_FMT_PEM);
-            if (ret != GNUTLS_E_SUCCESS)
-                ret = gnutls_x509_crt_import(ssock->certificate, &dt,
-                                             GNUTLS_X509_FMT_DER);
-            if (ret != GNUTLS_E_SUCCESS) {
-                fprintf(stderr, "Could not import certificate %s - %s",
-                        cert->cert_file.ptr, gnutls_strerror(ret));
-                return PJ_EINVAL;
-            }
-#if 0
-            /* Load certificate chain from file into ctx */
-            rc = SSL_CTX_use_certificate_chain_file(ctx, cert->cert_file.ptr);
-
-            if(rc != 1) {
-                status = GET_SSL_STATUS(ssock);
-                PJ_LOG(1,(ssock->pool->obj_name, "Error loading certificate "
-                          "chain file '%s'", cert->cert_file.ptr));
-                SSL_CTX_free(ctx);
-                return status;
-            }
-#endif
-        }
-
-
-        /* Load private key if one is specified */
-        if (cert->privkey_file.slen) {
-            gnutls_datum_t dt;
-
-            gnutls_x509_privkey_init(&ssock->private_key);
-            status = tls_load_file(ssock->pool, cert->privkey_file.ptr, &dt);
-            if (status != PJ_SUCCESS) {
-                fprintf(stderr, "Could not read file\n");
-                return PJ_EINVAL;
-            }
-            ret = gnutls_x509_privkey_import(ssock->private_key, &dt,
-                                         GNUTLS_X509_FMT_PEM);
-            if (ret != GNUTLS_E_SUCCESS)
-                ret = gnutls_x509_crt_import(ssock->private_key, &dt,
-                                             GNUTLS_X509_FMT_DER);
-            if (ret != GNUTLS_E_SUCCESS) {
-                fprintf(stderr, "Could not import private key %s - %s",
-                        cert->privkey_file.ptr, gnutls_strerror(ret));
-                return PJ_EINVAL;
-            }
-#if 0
-            /* Adds the first private key found in file to ctx */
-            rc = SSL_CTX_use_PrivateKey_file(ctx, cert->privkey_file.ptr,
-                                             SSL_FILETYPE_PEM);
-
-            if(rc != 1) {
-                status = GET_SSL_STATUS(ssock);
-                PJ_LOG(1,(ssock->pool->obj_name, "Error adding private key "
-                          "from '%s'", cert->privkey_file.ptr));
-                SSL_CTX_free(ctx);
-                return status;
-            }
-
-            bio = BIO_new_file(cert->privkey_file.ptr, "r");
-            if (bio != NULL) {
-                dh = PEM_read_bio_DHparams(bio, NULL, NULL, NULL);
-                if (dh != NULL) {
-                   if (SSL_CTX_set_tmp_dh(ctx, dh)) {
-                        options = SSL_OP_CIPHER_SERVER_PREFERENCE |
-                                  SSL_OP_SINGLE_DH_USE;
-                        options = SSL_CTX_set_options(ctx, options);
-                        PJ_LOG(4,(ssock->pool->obj_name, "SSL DH "
-                                  "initialized, PFS cipher-suites enabled"));
-                   }
-                   DH_free(dh);
-                }
-                BIO_free(bio);
-            }
-#endif
         }
     }
+
+
 
 #if 0
     #ifndef SSL_CTRL_SET_ECDH_AUTO
