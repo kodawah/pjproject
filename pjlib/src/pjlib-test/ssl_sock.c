@@ -1376,8 +1376,8 @@ int ssl_sock_test(void)
      * which require SSL server, for now.
      */
 
-    PJ_LOG(3,("", "..echo test w/ TLSv1 and PJ_TLS_RSA_EXPORT_WITH_RC4_40_MD5 cipher"));
-    ret = echo_test(PJ_SSL_SOCK_PROTO_TLS1, PJ_SSL_SOCK_PROTO_TLS1, 
+    PJ_LOG(3,("", "..echo test w/ SSLv3 and PJ_TLS_RSA_EXPORT_WITH_RC4_40_MD5 cipher"));
+    ret = echo_test(PJ_SSL_SOCK_PROTO_SSL3, PJ_SSL_SOCK_PROTO_SSL3,
 		    PJ_TLS_RSA_EXPORT_WITH_RC4_40_MD5, PJ_TLS_RSA_EXPORT_WITH_RC4_40_MD5, 
 		    PJ_FALSE, PJ_FALSE);
     if (ret != 0)
