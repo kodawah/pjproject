@@ -554,6 +554,7 @@ static pj_status_t tls_priorities_set(pj_ssl_sock_t *ssock)
     char buf[1024];
     pj_str_t cipher_list;
     pj_str_t compression = pj_str("COMP-NULL");
+    pj_str_t server = pj_str(":%SERVER_PRECEDENCE");
     int i, j, status;
     const char *priority;
     const char *err;
@@ -633,6 +634,15 @@ static pj_status_t tls_priorities_set(pj_ssl_sock_t *ssock)
     /* disable compression, it's a TLS extension only after all */
     tls_str_append_once(&cipher_list, &compression);
 
+    /* server should be the one deciding which cripto to use */
+    if (ssock->is_server) {
+       if (cipher_list.slen + server.slen + 1 > sizeof(buf)) {
+            pj_assert(!"Insufficient temporary buffer for cipher");
+            return PJ_ETOOMANY;
+        } else
+            pj_strcat(&cipher_list, &server);
+    }
+
     /* end the string */
     cipher_list.ptr[cipher_list.slen] = '\0';
 
@@ -690,6 +700,8 @@ static pj_status_t create_ssl(pj_ssl_sock_t *ssock)
 
     /* Allocate credentials loading root cert, needed for handshaking */
     gnutls_certificate_allocate_credentials(&ssock->xcred);
+    gnutls_certificate_set_verify_function(ssock->xcred, verify_callback);
+    // TODO load more places
     gnutls_certificate_set_x509_trust_file(ssock->xcred,
                                            "/etc/ssl/certs/ca-certificates.crt",
                                            GNUTLS_X509_FMT_PEM);
@@ -841,11 +853,9 @@ static pj_status_t create_ssl(pj_ssl_sock_t *ssock)
 #endif
 
     /* SSL verification options */
-    mode = SSL_VERIFY_PEER;
     if (ssock->is_server && ssock->param.require_client_cert)
-        mode |= SSL_VERIFY_FAIL_IF_NO_PEER_CERT;
+        gnutls_certificate_server_set_request(ssock->session, GNUTLS_CERT_REQUIRE);
 
-    gnutls_certificate_set_verify_function(ssock->xcred, verify_callback);
 
     gnutls_credentials_set(ssock->session, GNUTLS_CRD_CERTIFICATE, ssock->xcred);
 
