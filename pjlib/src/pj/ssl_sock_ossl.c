@@ -182,6 +182,8 @@ struct pj_ssl_sock_t
     gnutls_x509_crt_t     certificate;
     gnutls_x509_privkey_t private_key;
     void                 *read_buf;
+
+    int                   tls_init_count; /* library initialization counter */
 };
 
 
@@ -288,10 +290,6 @@ static pj_str_t ssl_strerror(pj_status_t status,
     return errstr;
 }
 
-
-/* OpenSSL library initialization counter */
-static int openssl_init_count;
-
 /* OpenSSL available ciphers */
 static unsigned openssl_cipher_num;
 static struct openssl_ciphers_t {
@@ -307,10 +305,7 @@ static void print_logs(int level, const char* msg)
 /* Initialize OpenSSL */
 static pj_status_t init_openssl(void)
 {
-    if (openssl_init_count)
-        return PJ_SUCCESS;
 
-    openssl_init_count = 1;
 
     /* Register error subsystem */
     /*status = pj_register_strerror(PJ_SSL_ERRNO_START,
@@ -353,7 +348,6 @@ static pj_status_t init_openssl(void)
 /* Shutdown OpenSSL */
 static void shutdown_openssl(void)
 {
-    openssl_init_count--;
     gnutls_global_deinit();
 }
 
@@ -676,8 +670,13 @@ static pj_status_t create_ssl(pj_ssl_sock_t *ssock)
 
     cert = ssock->cert;
 
-    /* Make sure OpenSSL library has been initialized */
-    init_openssl();
+    /* OpenSSL library initialization counter */
+    if (!ssock->tls_init_count) {
+        ssock->tls_init_count++;
+        init_openssl();
+    } else
+        return PJ_SUCCESS;
+
     gnutls_init(&ssock->session, ssock->is_server ? GNUTLS_SERVER : GNUTLS_CLIENT);
 
     /* Set SSL sock as application data of SSL instance */
@@ -876,12 +875,6 @@ static pj_status_t create_ssl(pj_ssl_sock_t *ssock)
 /* Destroy SSL context and instance */
 static void destroy_ssl(pj_ssl_sock_t *ssock)
 {
-    /* Destroy SSL instance */
-    if (ssock->session) {
-        gnutls_bye(ssock->session, GNUTLS_SHUT_RDWR);
-        gnutls_deinit(ssock->session);
-        ssock->session = NULL;
-    }
 
     /* Destroy SSL context */
     if (ssock->xcred) {
@@ -889,10 +882,22 @@ static void destroy_ssl(pj_ssl_sock_t *ssock)
         ssock->xcred = NULL;
     }
 
+    /* Destroy SSL instance */
+    if (ssock->session) {
+        gnutls_bye(ssock->session, GNUTLS_SHUT_RDWR);
+        gnutls_deinit(ssock->session);
+        ssock->session = NULL;
+    }
+
     /* Potentially shutdown OpenSSL library if this is the last
      * context exists.
      */
-    shutdown_openssl();
+
+    /* OpenSSL library initialization counter */
+    if (ssock->tls_init_count) {
+        ssock->tls_init_count--;
+        shutdown_openssl();
+    }
 }
 
 
