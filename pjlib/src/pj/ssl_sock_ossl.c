@@ -913,34 +913,30 @@ static void get_cert_info(pj_pool_t *pool, pj_ssl_cert_info *ci, gnutls_x509_crt
 
     pj_ssl_cert_name_type type;
     if (ci->version >= 3) {
+        char out[256] = { 0 };
         /* Get the number of all alternate names so that we can allocate
          * the correct number of bytes in subj_alt_name */
-        while (gnutls_x509_crt_get_subject_alt_name(cert, seq, buf, &len, NULL) != GNUTLS_E_REQUESTED_DATA_NOT_AVAILABLE)
+        while (gnutls_x509_crt_get_subject_alt_name(cert, seq, out, &len, NULL) != GNUTLS_E_REQUESTED_DATA_NOT_AVAILABLE)
             seq++;
 
         ci->subj_alt_name.entry = pj_pool_calloc(pool, seq,
                                                  sizeof(*ci->subj_alt_name.entry));
         for (i = 0; i < seq; i++) {
-            len = sizeof(buf) - 1;
-            ret = gnutls_x509_crt_get_subject_alt_name(cert, i, buf, &len, NULL);
+            len = sizeof(out) - 1;
+            ret = gnutls_x509_crt_get_subject_alt_name(cert, i, out, &len, NULL);
             switch (ret) {
             case GNUTLS_SAN_IPADDRESS:
                 type = PJ_SSL_CERT_NAME_IP;
-                int af = pj_AF_INET();
-                if (len == sizeof(pj_in6_addr))
-                    af = pj_AF_INET6();
-                pj_inet_ntop2(af, buf, buf, sizeof(buf));
+                pj_inet_ntop2(len == sizeof(pj_in6_addr) ? pj_AF_INET6() : pj_AF_INET(),
+                              out, buf, sizeof(buf));
                 break;
             case GNUTLS_SAN_URI:
-                buf[len] = '\0';
                 type = PJ_SSL_CERT_NAME_URI;
                 break;
             case GNUTLS_SAN_RFC822NAME:
-                buf[len] = '\0';
                 type = PJ_SSL_CERT_NAME_RFC822;
                 break;
             case GNUTLS_SAN_DNSNAME:
-                buf[len] = '\0';
                 type = PJ_SSL_CERT_NAME_DNS;
                 break;
             default:
@@ -950,7 +946,8 @@ static void get_cert_info(pj_pool_t *pool, pj_ssl_cert_info *ci, gnutls_x509_crt
 
             if (len && type != PJ_SSL_CERT_NAME_UNKNOWN) {
                 ci->subj_alt_name.entry[ci->subj_alt_name.cnt].type = type;
-                pj_strdup2(pool, &ci->subj_alt_name.entry[ci->subj_alt_name.cnt].name, buf);
+                pj_strdup2(pool, &ci->subj_alt_name.entry[ci->subj_alt_name.cnt].name,
+                           type == PJ_SSL_CERT_NAME_IP ? buf : out);
                 ci->subj_alt_name.cnt++;
             }
         }
