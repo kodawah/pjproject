@@ -2099,7 +2099,7 @@ PJ_DEF(pj_status_t) pj_ssl_sock_get_info (pj_ssl_sock_t *ssock,
 
         /* Current cipher */
         cipher = gnutls_cipher_get(ssock->session);
-        info->cipher = (cipher & 0x00FFFFFF);
+        info->cipher = cipher;
 
         /* Remote address */
         pj_sockaddr_cp(&info->remote_addr, &ssock->rem_addr);
