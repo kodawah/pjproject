@@ -1063,19 +1063,37 @@ static void get_cert_info(pj_pool_t *pool, pj_ssl_cert_info *ci, gnutls_x509_crt
 static void update_certs_info(pj_ssl_sock_t *ssock)
 {
     gnutls_x509_crt_t cert = NULL;
+    const gnutls_datum_t *us;
     const gnutls_datum_t *certs;
-    unsigned int certslen;
+    unsigned int certslen = 0;
     int err;
 
     pj_assert(ssock->ssl_state == SSL_STATE_ESTABLISHED);
 
-    /* Active local certificate */
-    pj_bzero(&ssock->local_cert_info, sizeof(pj_ssl_cert_info));
+    us = gnutls_certificate_get_ours(ssock->session);
+    if (us != NULL) {
+        err = gnutls_x509_crt_init(&cert);
+        if (err != GNUTLS_E_SUCCESS) {
+            fprintf(stderr, "Could not init certificate - %s\n", gnutls_strerror(err));
+            goto out;
+        }
+        err = gnutls_x509_crt_import(cert, us, GNUTLS_X509_FMT_DER);
+        if (err != GNUTLS_E_SUCCESS) {
+            fprintf(stderr, "Could not read our certificate - %s\n", gnutls_strerror(err));
+            goto out;
+        }
+        get_cert_info(ssock->pool, &ssock->local_cert_info, cert);
+        gnutls_x509_crt_deinit(cert);
+        cert = NULL;
+    } else {
+        /* Active local certificate */
+        pj_bzero(&ssock->local_cert_info, sizeof(pj_ssl_cert_info));
+    }
 
     /* Active remote certificate */
     certs = gnutls_certificate_get_peers(ssock->session, &certslen);
     if (certs == NULL || certslen == 0) {
-        fprintf(stderr, "Could not obtain peer certificate");
+        fprintf(stderr, "Could not obtain peer certificate\n");
         goto out;
     }
     err = gnutls_x509_crt_init(&cert);
