@@ -783,7 +783,6 @@ static pj_status_t create_ssl(pj_ssl_sock_t *ssock)
 /* Destroy SSL context and instance */
 static void destroy_ssl(pj_ssl_sock_t *ssock)
 {
-
     /* Destroy SSL context */
     if (ssock->xcred) {
         gnutls_certificate_free_credentials(ssock->xcred);
@@ -798,10 +797,7 @@ static void destroy_ssl(pj_ssl_sock_t *ssock)
     }
 
     /* Potentially shutdown OpenSSL library if this is the last
-     * context exists.
-     */
-
-    /* OpenSSL library initialization counter */
+     * context exists. */
     if (ssock->tls_init_count) {
         ssock->tls_init_count--;
         shutdown_openssl();
