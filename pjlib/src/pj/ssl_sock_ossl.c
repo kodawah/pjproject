@@ -182,6 +182,7 @@ struct pj_ssl_sock_t
     gnutls_x509_crt_t     certificate;
     gnutls_x509_privkey_t private_key;
     void                 *read_buf;
+    int read_buflen;
 
     int                   tls_init_count; /* library initialization counter */
 };
@@ -474,13 +475,16 @@ static ssize_t data_push(gnutls_transport_ptr_t ptr, const void *data, size_t le
 static ssize_t data_pull(gnutls_transport_ptr_t ptr, void *data, size_t len)
 {
     pj_ssl_sock_t *ssock = (pj_ssl_sock_t *)ptr;
+    pj_status_t status;
+    size_t orig_len = len;
     if (ssock->read_buf) {
         memcpy(data, ssock->read_buf, len);
         ssock->read_buf += len;
-        return len;
+        ssock->read_buflen -= len;
+        return ssock->read_buflen < 0 ? -1 : len;
     } else {
-        pj_sock_recv(ssock->sock, data, (pj_ssize_t *)&len, 0);
-        return len;
+        status = pj_sock_recv(ssock->sock, data, (pj_ssize_t *)&len, 0);
+        return status == PJ_SUCCESS ? len : -1;
     }
 }
 
@@ -1488,10 +1492,10 @@ static pj_status_t do_handshake(pj_ssl_sock_t *ssock)
 
     /* Perform SSL handshake */
     //pj_lock_acquire(ssock->write_mutex);
-    do {
+    //do {
         err = gnutls_handshake(ssock->session);
         //fprintf(stderr, "error during handshake. %s\n", gnutls_strerror(err));
-    } while (err != 0 && !gnutls_error_is_fatal(err));
+    //} while (err != 0 && !gnutls_error_is_fatal(err));
 
     if (err == GNUTLS_E_SUCCESS) {
         ssock->ssl_state = SSL_STATE_ESTABLISHED;
@@ -1539,8 +1543,11 @@ static pj_bool_t asock_on_data_read (pj_activesock_t *asock,
     if (ssock->ssl_state == SSL_STATE_HANDSHAKING) {
         pj_bool_t ret = PJ_TRUE;
 
+        ssock->read_buf = data;
+        ssock->read_buflen = size;
         if (status == PJ_SUCCESS)
             status = do_handshake(ssock);
+        ssock->read_buf = NULL;
 
         /* Not pending is either success or failed */
         if (status != PJ_EPENDING)
@@ -1556,6 +1563,7 @@ static pj_bool_t asock_on_data_read (pj_activesock_t *asock,
 
         /* Save the encrypted data and let data_pull deal with it */
         ssock->read_buf = data;
+        ssock->read_buflen = size;
         decoded_size = gnutls_record_recv(ssock->session, decoded_data, size);
         ssock->read_buf = NULL;
 
