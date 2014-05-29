@@ -45,6 +45,10 @@
 /* Maximum ciphers */
 #define MAX_CIPHERS             100
 
+/* Standard CA locations */
+#define TRUST_STORE_FILE1 "/etc/ssl/certs/ca-certificates.crt"
+#define TRUST_STORE_FILE2 "/etc/ssl/certs/ca-bundle.crt"
+
 /*
  * Include OpenSSL headers
  */
@@ -642,7 +646,32 @@ static pj_status_t tls_priorities_set(pj_ssl_sock_t *ssock)
     return PJ_SUCCESS;
 }
 
+static pj_status_t tls_trust_set(pj_ssl_sock_t *ssock)
+{
+    int ntrusts = 0;
+    int err;
 
+#if GNUTLS_VERSION_MAJOR >= 3 && GNUTLS_VERSION_PATCH >= 20
+    err = gnutls_certificate_set_x509_system_trust(ssock->xcred);
+    if (err > 0)
+        ntrusts += err;
+#endif
+    err = gnutls_certificate_set_x509_trust_file(ssock->xcred,
+                                                 TRUST_STORE_FILE1,
+                                                 GNUTLS_X509_FMT_PEM);
+    if (err > 0)
+        ntrusts += err;
+
+    err = gnutls_certificate_set_x509_trust_file(ssock->xcred,
+                                                 TRUST_STORE_FILE2,
+                                                 GNUTLS_X509_FMT_PEM);
+    if (err > 0)
+        ntrusts += err;
+
+    return ntrusts > 0 ? PJ_SUCCESS
+                       : ntrusts == 0 ? PJ_ENOTFOUND
+                                      : PJ_EINVAL;
+}
 
 /* Create and initialize new SSL context and instance */
 static pj_status_t create_ssl(pj_ssl_sock_t *ssock)
@@ -684,10 +713,13 @@ static pj_status_t create_ssl(pj_ssl_sock_t *ssock)
     /* Allocate credentials loading root cert, needed for handshaking */
     gnutls_certificate_allocate_credentials(&ssock->xcred);
     gnutls_certificate_set_verify_function(ssock->xcred, verify_callback);
-    // TODO load more places
-    gnutls_certificate_set_x509_trust_file(ssock->xcred,
-                                           "/etc/ssl/certs/ca-certificates.crt",
-                                           GNUTLS_X509_FMT_PEM);
+
+    /* Load system trust file(s) */
+    status = tls_trust_set(ssock);
+    if (status != PJ_SUCCESS) {
+        fprintf(stderr, "Could not load any trusted file\n");
+        return status;
+    }
 
     /* Apply credentials */
     if (cert) {
