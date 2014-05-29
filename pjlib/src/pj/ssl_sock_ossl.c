@@ -2095,11 +2095,24 @@ PJ_DEF(pj_status_t) pj_ssl_sock_get_info (pj_ssl_sock_t *ssock,
     pj_sockaddr_cp(&info->local_addr, &ssock->local_addr);
 
     if (info->established) {
+        int i;
+        gnutls_cipher_algorithm_t lookup;
         gnutls_cipher_algorithm_t cipher;
 
         /* Current cipher */
         cipher = gnutls_cipher_get(ssock->session);
-        info->cipher = cipher;
+        for (i = 0; ; i++) {
+            unsigned char id[2];
+            const char *suite = gnutls_cipher_suite_info(i, (unsigned char *)id,
+                                                         NULL, &lookup, NULL, NULL);
+            if (suite != NULL) {
+                if (lookup == cipher) {
+                    info->cipher = (pj_uint32_t) ((id[0] << 8) | id[1]);
+                    break;
+                }
+            } else
+                break;
+        }
 
         /* Remote address */
         pj_sockaddr_cp(&info->remote_addr, &ssock->rem_addr);
