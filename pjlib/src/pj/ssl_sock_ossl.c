@@ -155,7 +155,7 @@ struct pj_ssl_sock_t
     pj_timer_entry        timer;
     pj_status_t           verify_status;
 
-    unsigned long         last_err;
+    int                   last_err;
 
     pj_sock_t             sock;
     pj_activesock_t      *asock;
@@ -201,6 +201,7 @@ struct pj_ssl_cert_t
     pj_str_t privkey_pass;
 };
 
+static int tls_last_error;
 
 //static write_data_t* alloc_send_data(pj_ssl_sock_t *ssock, pj_size_t len);
 static void free_send_data(pj_ssl_sock_t *ssock, write_data_t *wdata);
@@ -212,44 +213,85 @@ static pj_status_t flush_delayed_send(pj_ssl_sock_t *ssock);
  *******************************************************************
  */
 
-/**
- * Mapping from OpenSSL error codes to pjlib error space.
- */
-
-#define PJ_SSL_ERRNO_START              (PJ_ERRNO_START_USER + \
-                                         PJ_ERRNO_SPACE_SIZE*6)
-
-#define PJ_SSL_ERRNO_SPACE_SIZE         PJ_ERRNO_SPACE_SIZE
-
-/* Expected maximum value of reason component in OpenSSL error code */
-#define MAX_OSSL_ERR_REASON             1200
-
-static pj_status_t STATUS_FROM_SSL_ERR(pj_ssl_sock_t *ssock,
-                                       unsigned long err)
+static pj_status_t tls_status_from_err(pj_ssl_sock_t *ssock, int err)
 {
     pj_status_t status;
 
-    /* General SSL error, dig more from OpenSSL error queue */
-    if (err == SSL_ERROR_SSL)
-        err = ERR_get_error();
+    switch (err) {
+    case GNUTLS_E_SUCCESS:
+        status = PJ_SUCCESS;
+        break;
+    case GNUTLS_E_MEMORY_ERROR:
+        status = PJ_ENOMEM;
+        break;
+    case GNUTLS_E_LARGE_PACKET:
+        status = PJ_ETOOBIG;
+        break;
+    case GNUTLS_E_NO_CERTIFICATE_FOUND:
+        status = PJ_ENOTFOUND;
+        break;
+    case GNUTLS_E_SESSION_EOF:
+        status = PJ_EEOF;
+        break;
+    case GNUTLS_E_HANDSHAKE_TOO_LARGE:
+        status = PJ_ETOOBIG;
+        break;
+    case GNUTLS_E_EXPIRED:
+        status = PJ_EGONE;
+        break;
+    case GNUTLS_E_TIMEDOUT:
+        status = PJ_ETIMEDOUT;
+        break;
+    case GNUTLS_E_INTERRUPTED:
+    case GNUTLS_E_PREMATURE_TERMINATION:
+        status = PJ_ECANCELLED;
+        break;
+    case GNUTLS_E_INTERNAL_ERROR:
+    case GNUTLS_E_UNIMPLEMENTED_FEATURE:
+        status = PJ_EBUG;
+        break;
+    case GNUTLS_E_AGAIN:
+    case GNUTLS_E_REHANDSHAKE:
+        status = PJ_EPENDING; // or ebusy
+        break;
+    case GNUTLS_E_TOO_MANY_EMPTY_PACKETS:
+    case GNUTLS_E_TOO_MANY_HANDSHAKE_PACKETS:
+    case GNUTLS_E_RECORD_LIMIT_REACHED:
+        status = PJ_ETOOMANY;
+        break;
+    case GNUTLS_E_UNSUPPORTED_VERSION_PACKET:
+    case GNUTLS_E_UNSUPPORTED_SIGNATURE_ALGORITHM:
+    case GNUTLS_E_UNSUPPORTED_CERTIFICATE_TYPE:
+    case GNUTLS_E_X509_UNSUPPORTED_ATTRIBUTE:
+    case GNUTLS_E_X509_UNSUPPORTED_EXTENSION:
+    case GNUTLS_E_X509_UNSUPPORTED_CRITICAL_EXTENSION:
+        status = PJ_ENOTSUP;
+        break;
+    case GNUTLS_E_INVALID_SESSION:
+    case GNUTLS_E_INVALID_REQUEST:
+    case GNUTLS_E_INVALID_PASSWORD:
+    case GNUTLS_E_ILLEGAL_PARAMETER:
+    case GNUTLS_E_RECEIVED_ILLEGAL_EXTENSION:
+    case GNUTLS_E_UNEXPECTED_PACKET:
+    case GNUTLS_E_UNEXPECTED_PACKET_LENGTH:
+    case GNUTLS_E_UNEXPECTED_HANDSHAKE_PACKET:
+    case GNUTLS_E_UNWANTED_ALGORITHM:
+    case GNUTLS_E_USER_ERROR:
+        status = PJ_EINVAL;
+        break;
+    default:
+        status = PJ_EUNKNOWN;
+        break;
+    }
 
-    /* OpenSSL error range is much wider than PJLIB errno space, so
-     * if it exceeds the space, only the error reason will be kept.
-     * Note that the last native error will be kept as is and can be
-     * retrieved via SSL socket info.
-     */
-    status = ERR_GET_LIB(err)*MAX_OSSL_ERR_REASON + ERR_GET_REASON(err);
-    if (status > PJ_SSL_ERRNO_SPACE_SIZE)
-        status = ERR_GET_REASON(err);
-
-    status += PJ_SSL_ERRNO_START;
+    tls_last_error = err;
     ssock->last_err = err;
     return status;
 }
 
-static pj_status_t GET_SSL_STATUS(pj_ssl_sock_t *ssock)
+static pj_status_t tls_status_get(pj_ssl_sock_t *ssock)
 {
-    return STATUS_FROM_SSL_ERR(ssock, ERR_get_error());
+    return tls_status_from_err(ssock, ssock->last_err);
 }
 
 
@@ -260,36 +302,23 @@ static pj_str_t ssl_strerror(pj_status_t status,
                              char *buf, pj_size_t bufsize)
 {
     pj_str_t errstr;
-    unsigned long ssl_err = status;
-
-    if (ssl_err) {
-        unsigned long l, r;
-        ssl_err -= PJ_SSL_ERRNO_START;
-        l = ssl_err / MAX_OSSL_ERR_REASON;
-        r = ssl_err % MAX_OSSL_ERR_REASON;
-        ssl_err = ERR_PACK(l, 0, r);
-    }
+    const char *tmp = NULL;
+    tmp = gnutls_strerror(tls_last_error);
 
 #if defined(PJ_HAS_ERROR_STRING) && (PJ_HAS_ERROR_STRING != 0)
-
-    {
-        const char *tmp = NULL;
-        tmp = ERR_reason_error_string(ssl_err);
-        if (tmp) {
-            pj_ansi_strncpy(buf, tmp, bufsize);
-            errstr = pj_str(buf);
-            return errstr;
-        }
+    if (tmp) {
+        pj_ansi_strncpy(buf, tmp, bufsize);
+        errstr = pj_str(buf);
+        return errstr;
     }
-
 #endif  /* PJ_HAS_ERROR_STRING */
 
     errstr.ptr = buf;
-    errstr.slen = pj_ansi_snprintf(buf, bufsize,
-                                   "Unknown OpenSSL error %lu",
-                                   ssl_err);
+    errstr.slen = pj_ansi_snprintf(buf, bufsize, "GnuTLS error %lu: %s",
+-                                  tls_last_error, tmp);
     if (errstr.slen < 1 || errstr.slen >= (int)bufsize)
         errstr.slen = bufsize - 1;
+
     return errstr;
 }
 
@@ -308,13 +337,12 @@ static void print_logs(int level, const char* msg)
 /* Initialize OpenSSL */
 static pj_status_t init_openssl(void)
 {
-
-
     /* Register error subsystem */
-    /*status = pj_register_strerror(PJ_SSL_ERRNO_START,
-                                  PJ_SSL_ERRNO_SPACE_SIZE,
-                                  &ssl_strerror);*/
-    //pj_assert(status == PJ_SUCCESS);
+    pj_status_t status = pj_register_strerror(PJ_ERRNO_START_USER +
+                                              PJ_ERRNO_SPACE_SIZE * 6,
+                                              PJ_ERRNO_SPACE_SIZE,
+                                              &ssl_strerror);
+    pj_assert(status == PJ_SUCCESS);
 
     /* Init OpenSSL lib */
     gnutls_global_init();
@@ -642,6 +670,7 @@ static pj_status_t tls_priorities_set(pj_ssl_sock_t *ssock)
             fprintf(stderr, "Syntax error at: %s\n", err);
         return status;
     }
+    fprintf(stderr, "Set priority string: %s\n", cipher_list.ptr);
 
     return PJ_SUCCESS;
 }
@@ -798,16 +827,6 @@ static pj_status_t create_ssl(pj_ssl_sock_t *ssock)
 
     gnutls_credentials_set(ssock->session, GNUTLS_CRD_CERTIFICATE, ssock->xcred);
 
-
-#if 0
-    /* Setup SSL BIOs */
-    ssock->ossl_rbio = BIO_new(BIO_s_mem());
-    ssock->ossl_wbio = BIO_new(BIO_s_mem());
-    (void)BIO_set_close(ssock->ossl_rbio, BIO_CLOSE);
-    (void)BIO_set_close(ssock->ossl_wbio, BIO_CLOSE);
-    SSL_set_bio(ssock->ossl_ssl, ssock->ossl_rbio, ssock->ossl_wbio);
-#endif
-
     return PJ_SUCCESS;
 }
 
@@ -823,7 +842,7 @@ static void destroy_ssl(pj_ssl_sock_t *ssock)
 
     /* Destroy SSL instance */
     if (ssock->session) {
-        gnutls_bye(ssock->session, GNUTLS_SHUT_RDWR);
+        int ret = gnutls_bye(ssock->session, GNUTLS_SHUT_RDWR);
         gnutls_deinit(ssock->session);
         ssock->session = NULL;
     }
@@ -854,13 +873,7 @@ static void reset_ssl_sock_state(pj_ssl_sock_t *ssock)
         ssock->sock = PJ_INVALID_SOCKET;
     }
 
-    /* Upon error, OpenSSL may leave any error description in the thread
-     * error queue, which sometime may cause next call to SSL API returning
-     * false error alarm, e.g: in Linux, SSL_CTX_use_certificate_chain_file()
-     * returning false error after a handshake error (in different SSL_CTX!).
-     * For now, just clear thread error queue here.
-     */
-    //ERR_clear_error();
+    ssock->last_err = tls_last_error = GNUTLS_E_SUCCESS;
 }
 
 
@@ -888,7 +901,8 @@ static void get_cn_from_gen_name(const pj_str_t *gen_name, pj_str_t *cn)
  * hal already populated, this function will check if the contents need
  * to be updated by inspecting the issuer and the serial number.
  */
-static void get_cert_info(pj_pool_t *pool, pj_ssl_cert_info *ci, gnutls_x509_crt_t cert)
+static void tls_cert_get_info(pj_pool_t *pool, pj_ssl_cert_info *ci,
+                          gnutls_x509_crt_t cert)
 {
     pj_bool_t update_needed;
     char buf[512] = { 0 };
@@ -955,7 +969,8 @@ static void get_cert_info(pj_pool_t *pool, pj_ssl_cert_info *ci, gnutls_x509_crt
             switch (ret) {
             case GNUTLS_SAN_IPADDRESS:
                 type = PJ_SSL_CERT_NAME_IP;
-                pj_inet_ntop2(len == sizeof(pj_in6_addr) ? pj_AF_INET6() : pj_AF_INET(),
+                pj_inet_ntop2(len == sizeof(pj_in6_addr) ? pj_AF_INET6()
+                                                         : pj_AF_INET(),
                               out, buf, sizeof(buf));
                 break;
             case GNUTLS_SAN_URI:
@@ -974,14 +989,14 @@ static void get_cert_info(pj_pool_t *pool, pj_ssl_cert_info *ci, gnutls_x509_crt
 
             if (len && type != PJ_SSL_CERT_NAME_UNKNOWN) {
                 ci->subj_alt_name.entry[ci->subj_alt_name.cnt].type = type;
-                pj_strdup2(pool, &ci->subj_alt_name.entry[ci->subj_alt_name.cnt].name,
+                pj_strdup2(pool,
+                           &ci->subj_alt_name.entry[ci->subj_alt_name.cnt].name,
                            type == PJ_SSL_CERT_NAME_IP ? buf : out);
                 ci->subj_alt_name.cnt++;
             }
         }
-
-    /* Check against the commonName if no DNS alt. names were found,
-     * as per RFC3280. ????? */
+        /* TODO: if no DNS alt. names were found, we could check against
+         * the commonName as per RFC3280. */
     }
 }
 
@@ -989,7 +1004,7 @@ static void get_cert_info(pj_pool_t *pool, pj_ssl_cert_info *ci, gnutls_x509_crt
 /* Update local & remote certificates info. This function should be
  * called after handshake or renegotiation successfully completed.
  */
-static void update_certs_info(pj_ssl_sock_t *ssock)
+static void tls_cert_update(pj_ssl_sock_t *ssock)
 {
     gnutls_x509_crt_t cert = NULL;
     const gnutls_datum_t *us;
@@ -999,50 +1014,57 @@ static void update_certs_info(pj_ssl_sock_t *ssock)
 
     pj_assert(ssock->ssl_state == SSL_STATE_ESTABLISHED);
 
+    /* Get active local certificate */
     us = gnutls_certificate_get_ours(ssock->session);
-    if (us != NULL) {
-        err = gnutls_x509_crt_init(&cert);
-        if (err != GNUTLS_E_SUCCESS) {
-            fprintf(stderr, "Could not init certificate - %s\n", gnutls_strerror(err));
-            goto out;
-        }
-        err = gnutls_x509_crt_import(cert, us, GNUTLS_X509_FMT_DER);
-        if (err != GNUTLS_E_SUCCESS) {
-            fprintf(stderr, "Could not read our certificate - %s\n", gnutls_strerror(err));
-            goto out;
-        }
-        get_cert_info(ssock->pool, &ssock->local_cert_info, cert);
-        gnutls_x509_crt_deinit(cert);
-        cert = NULL;
-    } else {
-        /* Active local certificate */
-        pj_bzero(&ssock->local_cert_info, sizeof(pj_ssl_cert_info));
+    if (!us)
+        goto us_out;
+
+    err = gnutls_x509_crt_init(&cert);
+    if (err < 0) {
+        fprintf(stderr, "Could not init our certificate - %s\n", gnutls_strerror(err));
+        goto us_out;
+    }
+    err = gnutls_x509_crt_import(cert, us, GNUTLS_X509_FMT_DER);
+    if (err < 0)
+        err = gnutls_x509_crt_import(cert, us, GNUTLS_X509_FMT_PEM);
+    if (err < 0) {
+        fprintf(stderr, "Could not read our certificate - %s\n", gnutls_strerror(err));
+        goto us_out;
     }
 
-    /* Active remote certificate */
+    tls_cert_get_info(ssock->pool, &ssock->local_cert_info, cert);
+
+us_out:
+    if (cert)
+        gnutls_x509_crt_deinit(cert);
+    else
+        pj_bzero(&ssock->local_cert_info, sizeof(pj_ssl_cert_info));
+
+    cert = NULL;
+
+    /* Get active remote certificate */
     certs = gnutls_certificate_get_peers(ssock->session, &certslen);
     if (certs == NULL || certslen == 0) {
         fprintf(stderr, "Could not obtain peer certificate\n");
-        goto out;
+        goto peer_out;
     }
     err = gnutls_x509_crt_init(&cert);
-    if (err != GNUTLS_E_SUCCESS) {
+    if (err < 0) {
         fprintf(stderr, "Could not init certificate - %s", gnutls_strerror(err));
-        goto out;
+        goto peer_out;
     }
 
-    /* The peer certificate is the first certificate in the list. */
     err = gnutls_x509_crt_import(cert, certs, GNUTLS_X509_FMT_PEM);
-    if (err != GNUTLS_E_SUCCESS)
+    if (err < 0)
         err = gnutls_x509_crt_import(cert, certs, GNUTLS_X509_FMT_DER);
-    if (err != GNUTLS_E_SUCCESS) {
+    if (err < 0) {
         fprintf(stderr, "Could not read peer certificate - %s", gnutls_strerror(err));
-        goto out;
+        goto peer_out;
     }
 
-    get_cert_info(ssock->pool, &ssock->remote_cert_info, cert);
+    tls_cert_get_info(ssock->pool, &ssock->remote_cert_info, cert);
 
-out:
+peer_out:
     if (cert)
         gnutls_x509_crt_deinit(cert);
     else
@@ -1068,7 +1090,7 @@ static pj_bool_t on_handshake_complete(pj_ssl_sock_t *ssock,
 
     /* Update certificates info on successful handshake */
     if (status == PJ_SUCCESS)
-        update_certs_info(ssock);
+        tls_cert_update(ssock);
 
     /* Accepting */
     if (ssock->is_server) {
@@ -1124,12 +1146,6 @@ static pj_bool_t on_handshake_complete(pj_ssl_sock_t *ssock,
          */
         if (status != PJ_SUCCESS) {
             /* Server disconnected us, possibly due to SSL nego failure */
-            if (status == PJ_EEOF) {
-                unsigned long err;
-                err = ERR_get_error();
-                if (err != SSL_ERROR_NONE)
-                    status = STATUS_FROM_SSL_ERR(ssock, err);
-            }
             reset_ssl_sock_state(ssock);
         }
         if (ssock->param.cb.on_connect_complete) {
@@ -1446,6 +1462,7 @@ static pj_status_t do_handshake(pj_ssl_sock_t *ssock)
 
     if (err == GNUTLS_E_SUCCESS) {
         ssock->ssl_state = SSL_STATE_ESTABLISHED;
+        fprintf(stderr, "OK %s\n", gnutls_strerror(err));
         return PJ_SUCCESS;
     } else if (!gnutls_error_is_fatal(err)) {
         fprintf(stderr, "error during handshake. %s\n", gnutls_strerror(err));
@@ -1480,7 +1497,7 @@ static pj_bool_t asock_on_data_read (pj_activesock_t *asock,
         /* Consume the whole data */
         //nwritten = BIO_write(ssock->ossl_rbio, data, (int)size);
         if (nwritten < size) {
-            status = GET_SSL_STATUS(ssock);
+            status = tls_status_get(ssock);
             goto on_error;
         }
     }
@@ -1554,7 +1571,7 @@ static pj_bool_t asock_on_data_read (pj_activesock_t *asock,
             status = do_handshake(ssock);
             if (status == PJ_SUCCESS) {
                 /* Update certificates */
-                update_certs_info(ssock);
+                tls_cert_update(ssock);
                 /* Flush any data left in our buffers */
                 status = flush_delayed_send(ssock);
 
@@ -2308,7 +2325,7 @@ static pj_status_t ssl_write(pj_ssl_sock_t *ssock,
 
         //} else {
             /* Some problem occured */
-          //  status = STATUS_FROM_SSL_ERR(ssock, err);
+          //  status = tls_status_from_err(ssock, err);
         //}
     } else {
         /* nwritten < *size, shouldn't happen, unless write BIO cannot hold
@@ -2673,7 +2690,7 @@ PJ_DEF(pj_status_t) pj_ssl_sock_renegotiate(pj_ssl_sock_t *ssock)
 
     ret = SSL_renegotiate(ssock->ossl_ssl);
     if (ret <= 0) {
-        status = GET_SSL_STATUS(ssock);
+        status = tls_status_get(ssock);
     } else {
         status = do_handshake(ssock);
     }
