@@ -1363,13 +1363,13 @@ int ssl_sock_test(void)
     ret = get_cipher_list();
     if (ret != 0)
 	return ret;
+#endif
 
     PJ_LOG(3,("", "..https client test"));
-    ret = https_client_test(30000);
+    ret = https_client_test(30000000);
     // Ignore test result as internet connection may not be available.
     //if (ret != 0)
 	//return ret;
-#endif
 
 #ifndef PJ_SYMBIAN
    
@@ -1386,13 +1386,14 @@ int ssl_sock_test(void)
     if (ret != 0)
 	return ret;
 #endif
-
+#if 0
     PJ_LOG(3,("", "..echo test w/ SSLv23 and PJ_TLS_RSA_WITH_AES_256_CBC_SHA cipher"));
     ret = echo_test(PJ_SSL_SOCK_PROTO_SSL23, PJ_SSL_SOCK_PROTO_SSL23, 
 		    PJ_TLS_RSA_WITH_AES_256_CBC_SHA, PJ_TLS_RSA_WITH_AES_256_CBC_SHA,
 		    PJ_FALSE, PJ_FALSE);
     if (ret != 0)
 	return ret;
+#endif
 #if 0
     PJ_LOG(3,("", "..echo test w/ incompatible proto"));
     ret = echo_test(PJ_SSL_SOCK_PROTO_TLS1, PJ_SSL_SOCK_PROTO_SSL3, 
