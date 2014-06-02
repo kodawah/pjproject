@@ -500,17 +500,44 @@ static ssize_t data_pull(gnutls_transport_ptr_t ptr, void *data, size_t len)
     pj_ssl_sock_t *ssock = (pj_ssl_sock_t *)ptr;
     is_server = ssock->is_server;
     pj_status_t status;
-    if (ssock->read_buf) {
-        if (ssock->read_buflen - (int)len >= 0) {
-            memcpy(data, ssock->read_buf, len);
-            ssock->read_buf += len;
-            ssock->read_buflen -= len;
-
-            return ssock->read_buflen < 0 ? -1 : len;
-        }
+    
+    if (ssock->ssl_state == SSL_STATE_HANDSHAKING && ssock->read_buf == NULL) {
+        errno = EAGAIN;
         return -1;
+    }
+
+    if (ssock->read_buf) {
+        if (ssock->is_server)
+            fprintf(stderr, "Server, trying to read %d bytes via membuf\n", len);
+        else
+            fprintf(stderr, "Client, trying to read %d bytes via membuf\n", len);
+
+        if (ssock->read_buflen - (int)len < 0) {
+            errno = EAGAIN;
+            return -1;
+        }
+        memcpy(data, ssock->read_buf, len);
+        ssock->read_buf += len;
+        ssock->read_buflen -= len;
+
+        if (ssock->is_server)
+            fprintf(stderr, "Server, read %d bytes\n", len);
+        else
+            fprintf(stderr, "Client, read %d bytes\n", len);
+
+        return len;
     } else {
+        if (ssock->is_server)
+            fprintf(stderr, "Server, trying to read %d bytes via sock\n", len);
+        else
+            fprintf(stderr, "Client, trying to read %d bytes via sock\n", len);
+
         status = pj_sock_recv(ssock->sock, data, (pj_ssize_t *)&len, 0);
+                if (ssock->is_server)
+            fprintf(stderr, "Server, read %d bytes\n", len);
+        else
+            fprintf(stderr, "Client, read %d bytes\n", len);
+
         return status == PJ_SUCCESS ? len : -1;
     }
 }
@@ -1466,32 +1493,38 @@ static pj_status_t do_handshake(pj_ssl_sock_t *ssock)
     int err;
 
     /* Perform SSL handshake */
-    //pj_lock_acquire(ssock->write_mutex);
-    //do {
-        err = gnutls_handshake(ssock->session);
-        //fprintf(stderr, "error during handshake. %s\n", gnutls_strerror(err));
-    //} while (err != 0 && !gnutls_error_is_fatal(err));
-    //pj_lock_release(ssock->write_mutex);
-
+    err = gnutls_handshake(ssock->session);
     if (err == GNUTLS_E_SUCCESS) {
+        /* System are GO */
         ssock->ssl_state = SSL_STATE_ESTABLISHED;
         fprintf(stderr, "OK %s\n", gnutls_strerror(err));
+        /* cache the new pointer position */
+        ssock->pointerlen = 0;
+        ssock->pointer = ssock->read_buflen = NULL;
         return PJ_SUCCESS;
     } else if (!gnutls_error_is_fatal(err)) {
-        fprintf(stderr, "error during handshake. %s\n", gnutls_strerror(err));
-        if (gnutls_record_get_direction(ssock->session))
-            fprintf(stderr, "I WANTED TO WRITE\n");
+        /* Non fatal error, retry later (busy or again) */
+        if (ssock->is_server)
+            fprintf(stderr, "client error handshake. %s\n", gnutls_strerror(err));
         else
-            fprintf(stderr, "I WANTED TO READ\n");
+            fprintf(stderr, "client error handshake. %s\n", gnutls_strerror(err));
+
+        if (gnutls_record_get_direction(ssock->session))
+            fprintf(stderr, "BUT I WANTED TO WRITE\n");
+        else
+            fprintf(stderr, "BUT I WANTED TO READ\n");
+        /* reset pointer position */
+        ssock->read_buf = ssock->pointer;
+        ssock->read_buflen = ssock->pointerlen;
         return PJ_EPENDING;
     } else {
+        /* Fatal error invalidates session, no fallback */
         if (ssock->is_server)
-            fprintf(stderr, "FATAL server error during handshake. %s\n", gnutls_strerror(err));
+            fprintf(stderr, "FATAL server error handshake. %s\n", gnutls_strerror(err));
         else
-            fprintf(stderr, "FATA1 client error during handshake. %s\n", gnutls_strerror(err));
-        return PJ_ENOTFOUND;
+            fprintf(stderr, "FATAL client error handshake. %s\n", gnutls_strerror(err));
+        return PJ_EINVAL;
     }
-    //pj_lock_release(ssock->write_mutex);
 }
 
 
@@ -1530,24 +1563,12 @@ static pj_bool_t asock_on_data_read (pj_activesock_t *asock,
         ssock->pointerlen = ssock->read_buflen;
     }
 
-
     /* Check if SSL handshake hasn't finished yet */
     if (ssock->ssl_state == SSL_STATE_HANDSHAKING) {
         pj_bool_t ret = PJ_TRUE;
 
-        //ssock->read_buf = data;
-        //ssock->read_buflen = size;
-        //if (status == PJ_SUCCESS)
-            status = do_handshake(ssock);
-        //ssock->read_buf = NULL;
-        if (status != PJ_SUCCESS) {
-            ssock->read_buf = ssock->pointer;
-            ssock->read_buflen = ssock->pointerlen;
-        }else {
-            ssock->read_buflen == 0;
-                //free(ssock->read_buf);
-                ssock->read_buf = NULL;
-        }
+        status = do_handshake(ssock);
+
         /* Not pending is either success or failed */
         if (status != PJ_EPENDING)
             ret = on_handshake_complete(ssock, status);
@@ -1561,17 +1582,11 @@ static pj_bool_t asock_on_data_read (pj_activesock_t *asock,
         void *decoded_data = (void *)pj_pool_calloc(ssock->pool, size, 1);
 
         /* Save the encrypted data and let deal with it */
-        //ssock->read_buf = data;
-        //ssock->read_buflen = size;
         decoded_size = gnutls_record_recv(ssock->session, decoded_data, size);
-        //ssock->read_buf = NULL;
 
         if (decoded_size > 0 || status != PJ_SUCCESS) {
-            {
-            ssock->read_buflen == 0;
-                //free(ssock->read_buf);
-                ssock->read_buf = NULL;
-        }
+            ssock->pointer = ssock->read_buf;
+            ssock->pointerlen = ssock->read_buflen;
 
             if (ssock->param.cb.on_data_read) {
                 pj_bool_t ret;
@@ -1611,17 +1626,8 @@ static pj_bool_t asock_on_data_read (pj_activesock_t *asock,
             }
 
             /* Let's try renegotiating */
-        //ssock->read_buf = data;
-        //ssock->read_buflen = size;
-        status = do_handshake(ssock);
-        //ssock->read_buf = NULL;
+            status = do_handshake(ssock);
             if (status == PJ_SUCCESS) {
-             {
-            ssock->read_buflen == 0;
-                //free(ssock->read_buf);
-                ssock->read_buf = NULL;
-        }
-
                 /* Update certificates */
                 tls_cert_update(ssock);
                 /* Flush any data left in our buffers */
@@ -1637,8 +1643,6 @@ static pj_bool_t asock_on_data_read (pj_activesock_t *asock,
                     goto on_error;
                 }
             } else if (status != PJ_EPENDING) {
-            ssock->read_buf = ssock->pointer;
-            ssock->read_buflen = ssock->pointerlen;
                 PJ_PERROR(1, (ssock->pool->obj_name,
                               status, "Renegotiation failed"));
                 goto on_error;
