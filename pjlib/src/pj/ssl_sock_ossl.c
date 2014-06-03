@@ -470,17 +470,14 @@ static ssize_t tls_data_pull(gnutls_transport_ptr_t ptr, void *data, size_t len)
     pj_ssl_sock_t *ssock = (pj_ssl_sock_t *)ptr;
     pj_status_t status;
 
-    if (ssock->ssl_state != SSL_STATE_ESTABLISHED && ssock->read_buf == NULL) {
-        errno = EAGAIN;
-        return -1;
-    }
-
     if (ssock->read_buf) {
+#if 0
         if (ssock->is_server)
             fprintf(stderr, "Server, trying to read %d bytes via membuf\n", len);
         else
             fprintf(stderr, "Client, trying to read %d bytes via membuf\n", len);
-
+#endif
+        /* Avoid overreads */
         if (ssock->read_buflen - ssock->read_index < (int)len) {
             errno = EAGAIN;
             return -1;
@@ -488,25 +485,17 @@ static ssize_t tls_data_pull(gnutls_transport_ptr_t ptr, void *data, size_t len)
         memcpy(data, ssock->read_buf + ssock->read_index, len);
         ssock->read_index += len;
 
+#if 0
         if (ssock->is_server)
             fprintf(stderr, "Server, read %d bytes\n", len);
         else
             fprintf(stderr, "Client, read %d bytes\n", len);
-
+#endif
         return len;
     } else {
-        if (ssock->is_server)
-            fprintf(stderr, "Server, trying to read %d bytes via sock\n", len);
-        else
-            fprintf(stderr, "Client, trying to read %d bytes via sock\n", len);
-
-        status = pj_sock_recv(ssock->sock, data, (pj_ssize_t *)&len, 0);
-        if (ssock->is_server)
-            fprintf(stderr, "Server, read %d bytes\n", len);
-        else
-            fprintf(stderr, "Client, read %d bytes\n", len);
-
-        return status == PJ_SUCCESS ? len : -1;
+        /* Data buffers not yet filled */
+        errno = EAGAIN;
+        return -1;
     }
 }
 
