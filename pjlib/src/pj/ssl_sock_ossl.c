@@ -33,7 +33,7 @@
 #include <pj/file_io.h>
 
 
-#define LOG_LEVEL 12
+#define LOG_LEVEL 16
 /* Only build when PJ_HAS_SSL_SOCK is enabled */
 #if defined(PJ_HAS_SSL_SOCK) && PJ_HAS_SSL_SOCK != 0
 
@@ -1545,7 +1545,7 @@ static pj_bool_t asock_on_data_read (pj_activesock_t *asock,
         /* Save the encrypted data and let deal with it */
         decoded_size = gnutls_record_recv(ssock->session, decoded_data, size);
 
-        if (decoded_size > 0 || status != PJ_SUCCESS) {
+        if (decoded_size > 0) {
 
             if (ssock->param.cb.on_data_read) {
                 pj_bool_t ret;
@@ -1573,6 +1573,11 @@ static pj_bool_t asock_on_data_read (pj_activesock_t *asock,
 
             return PJ_TRUE;
         } else {
+            /* A non fatal error here just means that we need more data.
+             * Otherwise session is invalidated and it can't be restored. */
+            return !gnutls_error_is_fatal(decoded_size);
+
+#if 0
             /* SSL might just return SSL_ERROR_WANT_READ in
              * re-negotiation.  */
             if (decoded_size != GNUTLS_E_SUCCESS &&
@@ -1606,6 +1611,7 @@ static pj_bool_t asock_on_data_read (pj_activesock_t *asock,
             }
 
             return PJ_FALSE;
+#endif
         }
     }
 
@@ -2413,15 +2419,15 @@ static pj_status_t delay_send(pj_ssl_sock_t *ssock, pj_ioqueue_op_key_t *send_ke
 /**
  * Send data using the socket.
  */
-PJ_DEF(pj_status_t) pj_ssl_sock_send (pj_ssl_sock_t *ssock,
-                                      pj_ioqueue_op_key_t *send_key,
-                                      const void *data,
-                                      pj_ssize_t *size,
-                                      unsigned flags)
+PJ_DEF(pj_status_t) pj_ssl_sock_send(pj_ssl_sock_t *ssock,
+                                     pj_ioqueue_op_key_t *send_key,
+                                     const void *data,
+                                     pj_ssize_t *size,
+                                     unsigned flags)
 {
     pj_status_t status;
 
-    PJ_ASSERT_RETURN(ssock && data && size && (*size>0), PJ_EINVAL);
+    PJ_ASSERT_RETURN(ssock && data && size && (*size > 0), PJ_EINVAL);
     PJ_ASSERT_RETURN(ssock->ssl_state==SSL_STATE_ESTABLISHED, PJ_EINVALIDOP);
 
     /* Flush delayed send first. Sending data might be delayed when
