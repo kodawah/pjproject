@@ -1,6 +1,6 @@
 /* $Id$ */
 /*
- * Copyright (C) 2009-2011 Teluu Inc. (http://www.teluu.com)
+ * Copyright (C) 2014 Savoir-Faire Linux. (http://www.savoirfairelinux.com)
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -61,11 +61,11 @@
 #endif
 
 
-/* SSL/TLS state enumeration. */
-enum ssl_state {
-    SSL_STATE_NULL,
-    SSL_STATE_HANDSHAKING,
-    SSL_STATE_ESTABLISHED
+/* TLS state enumeration. */
+enum tls_connection_state {
+    TLS_STATE_NULL,
+    TLS_STATE_HANDSHAKING,
+    TLS_STATE_ESTABLISHED
 };
 
 /* Internal timer types. */
@@ -131,7 +131,7 @@ struct pj_ssl_sock_t {
     pj_ssl_cert_info      remote_cert_info;
 
     pj_bool_t             is_server;
-    enum ssl_state        ssl_state;
+    enum tls_connection_state connection_state;
     pj_ioqueue_op_key_t   handshake_op_key;
     pj_timer_entry        timer;
     pj_status_t           verify_status;
@@ -276,11 +276,6 @@ static pj_status_t tls_status_from_err(pj_ssl_sock_t *ssock, int err)
     tls_last_error = err;
     ssock->last_err = err;
     return status;
-}
-
-static pj_status_t tls_status_get(pj_ssl_sock_t *ssock)
-{
-    return tls_status_from_err(ssock, ssock->last_err);
 }
 
 
@@ -468,7 +463,6 @@ static ssize_t tls_data_push(gnutls_transport_ptr_t ptr, const void *data, size_
 static ssize_t tls_data_pull(gnutls_transport_ptr_t ptr, void *data, size_t len)
 {
     pj_ssl_sock_t *ssock = (pj_ssl_sock_t *)ptr;
-    pj_status_t status;
 
     if (ssock->read_buf) {
 #if 0
@@ -859,7 +853,7 @@ static void tls_close(pj_ssl_sock_t *ssock)
 /* Reset socket state. */
 static void tls_sock_reset(pj_ssl_sock_t *ssock)
 {
-    ssock->ssl_state = SSL_STATE_NULL;
+    ssock->connection_state = TLS_STATE_NULL;
 
     tls_close(ssock);
 
@@ -1010,7 +1004,7 @@ static void tls_cert_update(pj_ssl_sock_t *ssock)
     unsigned int certslen = 0;
     int ret;
 
-    pj_assert(ssock->ssl_state == SSL_STATE_ESTABLISHED);
+    pj_assert(ssock->connection_state == TLS_STATE_ESTABLISHED);
 
     /* Get active local certificate */
     us = gnutls_certificate_get_ours(ssock->session);
@@ -1445,7 +1439,7 @@ static pj_status_t tls_try_handshake(pj_ssl_sock_t *ssock)
     ret = gnutls_handshake(ssock->session);
     if (ret == GNUTLS_E_SUCCESS) {
         /* System are GO */
-        ssock->ssl_state = SSL_STATE_ESTABLISHED;
+        ssock->connection_state = TLS_STATE_ESTABLISHED;
         status = PJ_SUCCESS;
     } else if (!gnutls_error_is_fatal(ret)) {
         /* Non fatal error, retry later (busy or again) */
@@ -1491,7 +1485,7 @@ static pj_bool_t asock_on_data_read(pj_activesock_t *asock,
         goto on_error;
 
     /* Check if SSL handshake hasn't finished yet */
-    if (ssock->ssl_state == SSL_STATE_HANDSHAKING) {
+    if (ssock->connection_state == TLS_STATE_HANDSHAKING) {
         pj_bool_t ret = PJ_TRUE;
 
         status = tls_try_handshake(ssock);
@@ -1587,7 +1581,7 @@ static pj_bool_t asock_on_data_read(pj_activesock_t *asock,
     return PJ_TRUE;
 
 on_error:
-    if (ssock->ssl_state == SSL_STATE_HANDSHAKING)
+    if (ssock->connection_state == TLS_STATE_HANDSHAKING)
         return on_handshake_complete(ssock, status);
 
     if (ssock->read_started && ssock->param.cb.on_data_read) {
@@ -1615,7 +1609,7 @@ static pj_bool_t asock_on_data_sent(pj_activesock_t *asock,
     PJ_UNUSED_ARG(send_key);
     PJ_UNUSED_ARG(sent);
 
-    if (ssock->ssl_state == SSL_STATE_HANDSHAKING) {
+    if (ssock->connection_state == TLS_STATE_HANDSHAKING) {
         /* Initial handshaking */
         pj_status_t status = tls_try_handshake(ssock);
 
@@ -1773,7 +1767,7 @@ static pj_bool_t asock_on_accept_complete(pj_activesock_t *asock,
     }
 
     /* Start SSL handshake */
-    ssock->ssl_state = SSL_STATE_HANDSHAKING;
+    ssock->connection_state = TLS_STATE_HANDSHAKING;
     //SSL_set_accept_state(ssock->ossl_ssl);
     status = tls_try_handshake(ssock);
 
@@ -1854,7 +1848,7 @@ static pj_bool_t asock_on_connect_complete (pj_activesock_t *asock,
     }
 
     /* Start handshake */
-    ssock->ssl_state = SSL_STATE_HANDSHAKING;
+    ssock->connection_state = TLS_STATE_HANDSHAKING;
 
     status = tls_try_handshake(ssock);
     if (status != PJ_EPENDING)
@@ -2021,7 +2015,7 @@ PJ_DEF(pj_status_t) pj_ssl_sock_create(pj_pool_t *pool,
     ssock = PJ_POOL_ZALLOC_T(pool, pj_ssl_sock_t);
     ssock->pool = pool;
     ssock->sock = PJ_INVALID_SOCKET;
-    ssock->ssl_state = SSL_STATE_NULL;
+    ssock->connection_state = TLS_STATE_NULL;
     pj_list_init(&ssock->write_pending);
     pj_list_init(&ssock->write_pending_empty);
     pj_list_init(&ssock->send_pending);
@@ -2114,7 +2108,7 @@ PJ_DEF(pj_status_t) pj_ssl_sock_get_info (pj_ssl_sock_t *ssock,
     pj_bzero(info, sizeof(*info));
 
     /* Established flag */
-    info->established = (ssock->ssl_state == SSL_STATE_ESTABLISHED);
+    info->established = (ssock->connection_state == TLS_STATE_ESTABLISHED);
 
     /* Protocol */
     info->proto = ssock->param.proto;
@@ -2170,7 +2164,8 @@ PJ_DEF(pj_status_t) pj_ssl_sock_start_read(pj_ssl_sock_t *ssock,
     unsigned int i;
 
     PJ_ASSERT_RETURN(ssock && pool && buff_size, PJ_EINVAL);
-    PJ_ASSERT_RETURN(ssock->ssl_state == SSL_STATE_ESTABLISHED, PJ_EINVALIDOP);
+    PJ_ASSERT_RETURN(ssock->connection_state == TLS_STATE_ESTABLISHED,
+                     PJ_EINVALIDOP);
 
     readbuf = (void**) pj_pool_calloc(pool, ssock->param.async_cnt,
                                       sizeof(void *));
@@ -2197,7 +2192,7 @@ PJ_DEF(pj_status_t) pj_ssl_sock_start_read2 (pj_ssl_sock_t *ssock,
     unsigned int i;
 
     PJ_ASSERT_RETURN(ssock && pool && buff_size && readbuf, PJ_EINVAL);
-    PJ_ASSERT_RETURN(ssock->ssl_state == SSL_STATE_ESTABLISHED, PJ_EINVALIDOP);
+    PJ_ASSERT_RETURN(ssock->connection_state == TLS_STATE_ESTABLISHED, PJ_EINVALIDOP);
 
     /* Create SSL socket read buffer */
     ssock->ssock_rbuf = (read_data_t*)pj_pool_calloc(pool, ssock->param.async_cnt,
@@ -2396,7 +2391,7 @@ PJ_DEF(pj_status_t) pj_ssl_sock_send(pj_ssl_sock_t *ssock,
     pj_status_t status;
 
     PJ_ASSERT_RETURN(ssock && data && size && (*size > 0), PJ_EINVAL);
-    PJ_ASSERT_RETURN(ssock->ssl_state==SSL_STATE_ESTABLISHED, PJ_EINVALIDOP);
+    PJ_ASSERT_RETURN(ssock->connection_state==TLS_STATE_ESTABLISHED, PJ_EINVALIDOP);
 
     /* Flush delayed send first. Sending data might be delayed when
      * re-negotiation is on-progress. */
@@ -2644,7 +2639,8 @@ PJ_DEF(pj_status_t) pj_ssl_sock_renegotiate(pj_ssl_sock_t *ssock)
 {
     pj_status_t status;
 
-    PJ_ASSERT_RETURN(ssock->ssl_state == SSL_STATE_ESTABLISHED, PJ_EINVALIDOP);
+    PJ_ASSERT_RETURN(ssock->connection_state == TLS_STATE_ESTABLISHED,
+                     PJ_EINVALIDOP);
 
     status = tls_try_handshake(ssock);
 
