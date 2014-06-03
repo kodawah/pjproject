@@ -174,6 +174,7 @@ struct pj_ssl_sock_t
     void                 *read_buf;
     void *pointer;
     int read_buflen;
+    int read_index;
     int pointerlen;
 
     int                   tls_init_count; /* library initialization counter */
@@ -503,13 +504,12 @@ static ssize_t tls_data_pull(gnutls_transport_ptr_t ptr, void *data, size_t len)
         else
             fprintf(stderr, "Client, trying to read %d bytes via membuf\n", len);
 
-        if (ssock->read_buflen - (int)len < 0) {
+        if (ssock->read_buflen - ssock->read_index < (int)len) {
             errno = EAGAIN;
             return -1;
         }
-        memcpy(data, ssock->read_buf, len);
-        ssock->read_buf += len;
-        ssock->read_buflen -= len;
+        memcpy(data, ssock->read_buf + ssock->read_index, len);
+        ssock->read_index += len;
 
         if (ssock->is_server)
             fprintf(stderr, "Server, read %d bytes\n", len);
@@ -1487,9 +1487,6 @@ static pj_status_t tls_try_handshake(pj_ssl_sock_t *ssock)
         /* System are GO */
         ssock->ssl_state = SSL_STATE_ESTABLISHED;
         fprintf(stderr, "OK %s\n", gnutls_strerror(err));
-        /* cache the new pointer position */
-        ssock->pointerlen = 0;
-        ssock->pointer = ssock->read_buflen = NULL;
         return PJ_SUCCESS;
     } else if (!gnutls_error_is_fatal(err)) {
         /* Non fatal error, retry later (busy or again) */
@@ -1502,9 +1499,6 @@ static pj_status_t tls_try_handshake(pj_ssl_sock_t *ssock)
             fprintf(stderr, "BUT I WANTED TO WRITE\n");
         else
             fprintf(stderr, "BUT I WANTED TO READ\n");
-        /* reset pointer position */
-        ssock->read_buf = ssock->pointer;
-        ssock->read_buflen = ssock->pointerlen;
         return PJ_EPENDING;
     } else {
         /* Fatal error invalidates session, no fallback */
@@ -1532,19 +1526,12 @@ static pj_bool_t asock_on_data_read (pj_activesock_t *asock,
 {
     pj_ssl_sock_t *ssock = (pj_ssl_sock_t*)
                            pj_activesock_get_user_data(asock);
-#if 0
-    pj_size_t nwritten;
 
-    /* Socket error or closed */
-    if (data && size > 0) {
-        /* Consume the whole data */
-        //nwritten = BIO_write(ssock->ossl_rbio, data, (int)size);
-        if (nwritten < size) {
-            status = tls_status_get(ssock);
-            goto on_error;
-        }
-    }
-#endif
+    if (!ssock->read_buf)
+        ssock->read_buf = realloc(ssock->read_buf, ssock->read_buflen);
+    if (!ssock->read_buf)
+        exit(1);
+
     if (data && size > 0) {
         ssock->read_buflen += size;
         ssock->read_buf = realloc(ssock->read_buf, ssock->read_buflen);
@@ -1575,8 +1562,6 @@ static pj_bool_t asock_on_data_read (pj_activesock_t *asock,
         decoded_size = gnutls_record_recv(ssock->session, decoded_data, size);
 
         if (decoded_size > 0 || status != PJ_SUCCESS) {
-            ssock->pointer = ssock->read_buf;
-            ssock->pointerlen = ssock->read_buflen;
 
             if (ssock->param.cb.on_data_read) {
                 pj_bool_t ret;
@@ -1604,8 +1589,6 @@ static pj_bool_t asock_on_data_read (pj_activesock_t *asock,
 
             return PJ_TRUE;
         } else {
-            ssock->read_buf = ssock->pointer;
-            ssock->read_buflen = ssock->pointerlen;
             /* SSL might just return SSL_ERROR_WANT_READ in
              * re-negotiation.  */
             if (decoded_size != GNUTLS_E_SUCCESS &&
