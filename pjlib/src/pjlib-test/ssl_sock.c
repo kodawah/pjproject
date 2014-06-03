@@ -1363,13 +1363,13 @@ int ssl_sock_test(void)
     ret = get_cipher_list();
     if (ret != 0)
 	return ret;
-#if 0
+
     PJ_LOG(3,("", "..https client test"));
     ret = https_client_test(30000);
     // Ignore test result as internet connection may not be available.
     //if (ret != 0)
 	//return ret;
-#endif
+
 #ifndef PJ_SYMBIAN
    
     /* On Symbian platforms, SSL socket is implemented using CSecureSocket, 
