@@ -1363,13 +1363,13 @@ int ssl_sock_test(void)
     ret = get_cipher_list();
     if (ret != 0)
 	return ret;
-
+#if 0
     PJ_LOG(3,("", "..https client test"));
     ret = https_client_test(30000);
     // Ignore test result as internet connection may not be available.
     //if (ret != 0)
 	//return ret;
-
+#endif
 #ifndef PJ_SYMBIAN
    
     /* On Symbian platforms, SSL socket is implemented using CSecureSocket, 
@@ -1385,7 +1385,7 @@ int ssl_sock_test(void)
     if (ret != 0)
 	return ret;
 #endif
-#if 1
+#if 0
     PJ_LOG(3,("", "..echo test w/ SSLv23 and PJ_TLS_RSA_WITH_AES_256_CBC_SHA cipher"));
     ret = echo_test(PJ_SSL_SOCK_PROTO_SSL23, PJ_SSL_SOCK_PROTO_SSL23, 
 		    PJ_TLS_RSA_WITH_AES_256_CBC_SHA, PJ_TLS_RSA_WITH_AES_256_CBC_SHA,
@@ -1393,53 +1393,57 @@ int ssl_sock_test(void)
     if (ret != 0)
 	return ret;
 #endif
-#if 1
+#if 0
     PJ_LOG(3,("", "..echo test w/ incompatible proto"));
     ret = echo_test(PJ_SSL_SOCK_PROTO_TLS1, PJ_SSL_SOCK_PROTO_SSL3, 
 		    PJ_TLS_RSA_WITH_DES_CBC_SHA, PJ_TLS_RSA_WITH_DES_CBC_SHA,
 		    PJ_FALSE, PJ_FALSE);
     if (ret == 0)
 	return PJ_EBUG;
-
+#endif
+#if 0
     PJ_LOG(3,("", "..echo test w/ incompatible ciphers"));
     ret = echo_test(PJ_SSL_SOCK_PROTO_DEFAULT, PJ_SSL_SOCK_PROTO_DEFAULT, 
 		    PJ_TLS_RSA_WITH_DES_CBC_SHA, PJ_TLS_RSA_WITH_AES_256_CBC_SHA,
 		    PJ_FALSE, PJ_FALSE);
     if (ret == 0)
 	return PJ_EBUG;
-
+#endif
+#if 0
     PJ_LOG(3,("", "..echo test w/ client cert required but not provided"));
     ret = echo_test(PJ_SSL_SOCK_PROTO_DEFAULT, PJ_SSL_SOCK_PROTO_DEFAULT, 
 		    PJ_TLS_RSA_WITH_AES_256_CBC_SHA, PJ_TLS_RSA_WITH_AES_256_CBC_SHA,
 		    PJ_TRUE, PJ_FALSE);
     if (ret == 0)
 	return PJ_EBUG;
-
+#endif
+#if 1
     PJ_LOG(3,("", "..echo test w/ client cert required and provided"));
     ret = echo_test(PJ_SSL_SOCK_PROTO_DEFAULT, PJ_SSL_SOCK_PROTO_DEFAULT, 
 		    PJ_TLS_RSA_WITH_AES_256_CBC_SHA, PJ_TLS_RSA_WITH_AES_256_CBC_SHA,
 		    PJ_TRUE, PJ_TRUE);
     if (ret != 0)
 	return ret;
-
+#endif
+#if 1
     PJ_LOG(3,("", "..performance test"));
     ret = perf_test(PJ_IOQUEUE_MAX_HANDLES/2 - 1, 0);
     if (ret != 0)
 	return ret;
 
     PJ_LOG(3,("", "..client non-SSL (handshake timeout 5 secs)"));
-    ret = client_non_ssl(5000);
+    ret = client_non_ssl(1000);
     /* PJ_TIMEDOUT won't be returned as accepted socket is deleted silently */
     if (ret != 0)
 	return ret;
 #endif
 #endif
-
+#if 1
     PJ_LOG(3,("", "..server non-SSL (handshake timeout 5 secs)"));
-    //ret = server_non_ssl(5000);
+    ret = server_non_ssl(1000);
     if (ret != PJ_ETIMEDOUT)
 	return ret;
-
+#endif
     return 0;
 }
 
