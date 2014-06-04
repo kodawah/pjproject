@@ -48,8 +48,8 @@
 #define TRUST_STORE_FILE1 "/etc/ssl/certs/ca-certificates.crt"
 #define TRUST_STORE_FILE2 "/etc/ssl/certs/ca-bundle.crt"
 
-/* Debugging only */
-#define LOG_LEVEL 0
+/* Debugging output level for GnuTLS only */
+#define LOG_LEVEL 10
 
 /* GnuTLS includes */
 #include <gnutls/gnutls.h>
@@ -92,7 +92,7 @@ typedef struct read_data_t {
  */
 #define OFFSET_OF_READ_DATA_PTR(ssock, asock_rbuf) \
                                         (read_data_t**) \
-                                        ((pj_int8_t*)(asock_rbuf) + \
+                                        ((pj_int8_t *)(asock_rbuf) + \
                                         ssock->param.read_buffer_size)
 
 /* Structure of SSL socket write data. */
@@ -1809,17 +1809,17 @@ static pj_bool_t asock_on_connect_complete (pj_activesock_t *asock,
     /* Prepare read buffer */
     ssock->asock_rbuf = (void**)pj_pool_calloc(ssock->pool,
                                                ssock->param.async_cnt,
-                                               sizeof(void*));
+                                               sizeof(void *));
     for (i = 0; i<ssock->param.async_cnt; ++i) {
         ssock->asock_rbuf[i] = (void*) pj_pool_alloc(
                                             ssock->pool,
                                             ssock->param.read_buffer_size +
-                                            sizeof(read_data_t*));
+                                            sizeof(read_data_t *));
     }
 
     /* Start read */
     status = pj_activesock_start_read2(ssock->asock, ssock->pool,
-                                       (unsigned)ssock->param.read_buffer_size,
+                                       (unsigned) ssock->param.read_buffer_size,
                                        ssock->asock_rbuf,
                                        PJ_IOQUEUE_ALWAYS_ASYNC);
     if (status != PJ_SUCCESS)
