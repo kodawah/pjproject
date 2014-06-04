@@ -112,13 +112,13 @@ typedef struct write_data_t {
 
 
 /* Structure of SSL socket write buffer (circular buffer). */
-typedef struct send_buf_t {
+/*typedef struct send_buf_t {
     char                *buf;
     pj_size_t            max_len;
     char                *start;
     pj_size_t            len;
 } send_buf_t;
-
+*/
 
 /* Secure socket structure definition. */
 struct pj_ssl_sock_t {
@@ -154,7 +154,7 @@ struct pj_ssl_sock_t {
     write_data_t          write_pending; /* list of pending write to OpenSSL */
     write_data_t          write_pending_empty; /* cache for write_pending   */
     pj_bool_t             flushing_write_pend; /* flag of flushing is ongoing*/
-    send_buf_t            send_buf;
+    //send_buf_t            send_buf;
     write_data_t          send_pending; /* list of pending write to network */
     pj_lock_t            *write_mutex;  /* protect write BIO and send_buf   */
 
@@ -201,7 +201,7 @@ static pj_status_t flush_delayed_send(pj_ssl_sock_t *ssock);
  *******************************************************************
  */
 
-/* Convert from GnuTLS error to pj_status_t. */
+/* Convert from GnuTLS error to pj_status_t (best effort). */
 static pj_status_t tls_status_from_err(pj_ssl_sock_t *ssock, int err)
 {
     pj_status_t status;
@@ -279,7 +279,7 @@ static pj_status_t tls_status_from_err(pj_ssl_sock_t *ssock, int err)
 }
 
 
-/* Get error string from GnuTLS using tls_last_error */
+/* Get error string from GnuTLS using tls_last_error. */
 static pj_str_t ssl_strerror(pj_status_t status,
                              char *buf, pj_size_t bufsize)
 {
@@ -350,7 +350,7 @@ static pj_status_t tls_init(void)
 }
 
 
-/* Shutdown GnuTLS */
+/* Shutdown GnuTLS. */
 static void tls_deinit(void)
 {
     gnutls_global_deinit();
@@ -1747,6 +1747,7 @@ static pj_bool_t asock_on_accept_complete(pj_activesock_t *asock,
     if (status != PJ_SUCCESS)
         goto on_return;
 
+#if 0
     /* Prepare write/send state */
     pj_assert(ssock->send_buf.max_len == 0);
     ssock->send_buf.buf = (char *)pj_pool_alloc(ssock->pool,
@@ -1754,6 +1755,7 @@ static pj_bool_t asock_on_accept_complete(pj_activesock_t *asock,
     ssock->send_buf.max_len = ssock->param.send_buffer_size;
     ssock->send_buf.start = ssock->send_buf.buf;
     ssock->send_buf.len = 0;
+#endif
 
     /* Start handshake timer */
     if (ssock->param.timer_heap &&
@@ -1826,6 +1828,7 @@ static pj_bool_t asock_on_connect_complete (pj_activesock_t *asock,
     if (status != PJ_SUCCESS)
         goto on_return;
 
+#if 0
     /* Prepare write/send state */
     pj_assert(ssock->send_buf.max_len == 0);
     ssock->send_buf.buf = (char*)
@@ -1834,6 +1837,7 @@ static pj_bool_t asock_on_connect_complete (pj_activesock_t *asock,
     ssock->send_buf.max_len = ssock->param.send_buffer_size;
     ssock->send_buf.start = ssock->send_buf.buf;
     ssock->send_buf.len = 0;
+#endif
 
     /* Set server name to connect */
     if (ssock->param.server_name.slen) {
