@@ -192,7 +192,7 @@ static int tls_last_error;
 
 
 //static write_data_t* alloc_send_data(pj_ssl_sock_t *ssock, pj_size_t len);
-static void free_send_data(pj_ssl_sock_t *ssock, write_data_t *wdata);
+//static void free_send_data(pj_ssl_sock_t *ssock, write_data_t *wdata);
 static pj_status_t flush_delayed_send(pj_ssl_sock_t *ssock);
 
 /*
@@ -1205,7 +1205,7 @@ init_send_data:
 }
 #endif
 
-
+#if 0
 static void free_send_data(pj_ssl_sock_t *ssock, write_data_t *wdata)
 {
     send_buf_t *buf = &ssock->send_buf;
@@ -1254,6 +1254,7 @@ static void free_send_data(pj_ssl_sock_t *ssock, write_data_t *wdata)
     /* Remove the data from send pending list */
     pj_list_erase(wdata);
 }
+#endif
 
 #if 0
 /* Just for testing send buffer alloc/free */
@@ -1632,12 +1633,12 @@ static pj_bool_t asock_on_data_sent(pj_activesock_t *asock,
                 return PJ_FALSE;
             }
         }
-
+#if 0
         /* Update write buffer state */
         pj_lock_acquire(ssock->write_mutex);
         free_send_data(ssock, wdata);
         pj_lock_release(ssock->write_mutex);
-
+#endif
     } else {
         /* SSL re-negotiation is on-progress, just do nothing */
     }
