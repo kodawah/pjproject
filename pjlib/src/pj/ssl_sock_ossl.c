@@ -120,6 +120,17 @@ typedef struct send_buf_t {
 } send_buf_t;
 
 
+/* Circular buffer object */
+typedef struct circ_buf_t {
+    pj_size_t           cap;    /* maximum number of elements (must be power of 2) */
+    pj_size_t           readp;  /* index of oldest element */
+    pj_size_t           writep; /* index at which to write new element  */
+    pj_size_t           size;   /* number of elements */
+    pj_uint8_t         *buf;    /* data buffer */
+    pj_pool_t          *pool;   /* where new allocations will take place */
+} circ_buf_t;
+
+
 /* Secure socket structure definition. */
 struct pj_ssl_sock_t {
     pj_pool_t            *pool;
@@ -160,15 +171,106 @@ struct pj_ssl_sock_t {
 
     gnutls_session_t      session;
     gnutls_certificate_credentials_t xcred;
-    void                 *read_buf;
-    void *pointer;
-    int read_buflen;
-    int read_index;
-    int pointerlen;
 
+    circ_buf_t            circ_buf;
     int                   tls_init_count; /* library initialization counter */
 };
 
+static pj_status_t circ_init(pj_pool_factory *factory, circ_buf_t *cb, pj_size_t cap)
+{
+    cb->cap    = cap;
+    cb->readp  = 0;
+    cb->writep = 0;
+    cb->size   = 0;
+    cb->pool   = pj_pool_create(factory, "tls-ring%p", cap, cap, NULL);
+    if (!cb->pool)
+        return PJ_ENOMEM;
+    cb->buf    = pj_pool_alloc(cb->pool, cap);
+    if (!cb->buf)
+        return PJ_ENOMEM;
+    return PJ_SUCCESS;
+}
+
+static void circ_deinit(circ_buf_t *cb)
+{
+    pj_pool_release(cb->pool);
+}
+
+static pj_bool_t circ_full(const circ_buf_t *cb)
+{
+    return cb->size == cb->cap;
+}
+
+static pj_bool_t circ_empty(const circ_buf_t *cb)
+{
+    return cb->size == 0;
+}
+
+static pj_bool_t circ_avail(const circ_buf_t *cb)
+{
+    return cb->cap - cb->size;
+}
+
+static void circ_read(circ_buf_t *cb, pj_uint8_t *dst, pj_size_t len)
+{
+    pj_size_t size_after = cb->cap - cb->readp;
+    pj_size_t tbc = PJ_MIN(size_after, len);
+    pj_size_t rem = len - tbc;
+
+    pj_memcpy(dst, cb->buf + cb->readp, tbc);
+    pj_memcpy(dst + tbc, cb->buf, rem);
+
+    cb->readp += len;
+    cb->readp &= (cb->cap - 1);
+
+    cb->size -= len;
+}
+
+static pj_status_t circ_write(circ_buf_t *cb, const pj_uint8_t *src, pj_size_t len)
+{
+    /* overflow condition */
+    if (len > circ_avail(cb)) {
+        /* find the New Minimum Capacity for the ring as a power of 2 */
+        pj_size_t nmc = cb->size + len;
+        nmc--;
+        nmc |= nmc >> 1;
+        nmc |= nmc >> 2;
+        nmc |= nmc >> 4;
+        nmc |= nmc >> 8;
+        nmc |= nmc >> 16;
+        nmc++;
+        /* recreate the buffer only with the new pool */
+        pj_pool_t *pool = pj_pool_create(cb->pool->factory, "tls%p", nmc, nmc, NULL);
+        if (!pool)
+            return PJ_ENOMEM;
+        pj_uint8_t *buf = pj_pool_alloc(pool, nmc);
+        if (!buf)
+            return PJ_ENOMEM;
+        /* copy old data in new one */
+        circ_read(cb, buf, cb->size);
+        /* "free" the previously allocated memory */
+        circ_deinit(cb);
+        /* init the new cb */
+        cb->pool = pool;
+        cb->buf = buf;
+        cb->readp = 0;
+        cb->writep = cb->size;
+        cb->cap = nmc;
+    }
+
+    pj_size_t size_after = cb->cap - cb->writep;
+    pj_size_t tbc = PJ_MIN(size_after, len);
+    pj_size_t rem = len - tbc;
+
+    pj_memcpy(cb->buf + cb->writep, src, tbc);
+    pj_memcpy(cb->buf, src + tbc, rem);
+
+    cb->writep += len;
+    cb->writep &= (cb->cap - 1);
+
+    cb->size += len;
+    return PJ_SUCCESS;
+}
 
 /* Certificate/credential structure definition. */
 struct pj_ssl_cert_t {
@@ -464,27 +566,8 @@ static ssize_t tls_data_pull(gnutls_transport_ptr_t ptr, void *data, size_t len)
 {
     pj_ssl_sock_t *ssock = (pj_ssl_sock_t *)ptr;
 
-    if (ssock->read_buf) {
-#if 0
-        if (ssock->is_server)
-            fprintf(stderr, "Server, trying to read %d bytes via membuf\n", len);
-        else
-            fprintf(stderr, "Client, trying to read %d bytes via membuf\n", len);
-#endif
-        /* Avoid overreads */
-        if (ssock->read_buflen - ssock->read_index < (int)len) {
-            errno = EAGAIN;
-            return -1;
-        }
-        memcpy(data, ssock->read_buf + ssock->read_index, len);
-        ssock->read_index += len;
-
-#if 0
-        if (ssock->is_server)
-            fprintf(stderr, "Server, read %d bytes\n", len);
-        else
-            fprintf(stderr, "Client, read %d bytes\n", len);
-#endif
+    if (ssock->circ_buf.size >= len) {
+        circ_read(&ssock->circ_buf, data, len);
         return len;
     } else {
         /* Data buffers not yet filled */
@@ -823,6 +906,8 @@ static pj_status_t tls_open(pj_ssl_sock_t *ssock)
         tls_last_error = ret;
         return PJ_EINVAL;
     }
+
+    return circ_init(ssock->pool->factory, &ssock->circ_buf, 2048);
 
     return PJ_SUCCESS;
 }
@@ -1471,17 +1556,8 @@ static pj_bool_t asock_on_data_read(pj_activesock_t *asock,
     pj_ssl_sock_t *ssock = (pj_ssl_sock_t *)
                            pj_activesock_get_user_data(asock);
 
-    if (!ssock->read_buf)
-        ssock->read_buf = realloc(ssock->read_buf, ssock->read_buflen);
-    if (!ssock->read_buf)
-        exit(1);
-
     if (data && size > 0) {
-        ssock->read_buflen += size;
-        ssock->read_buf = realloc(ssock->read_buf, ssock->read_buflen);
-        memcpy(ssock->read_buf + ssock->pointerlen, data, size);
-        ssock->pointer = ssock->read_buf;
-        ssock->pointerlen = ssock->read_buflen;
+        circ_write(&ssock->circ_buf, data, size);
     } else
         goto on_error;
 
