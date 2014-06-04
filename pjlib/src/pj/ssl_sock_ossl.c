@@ -172,7 +172,9 @@ struct pj_ssl_sock_t {
     gnutls_session_t      session;
     gnutls_certificate_credentials_t xcred;
 
-    circ_buf_t            circ_buf;
+    circ_buf_t            circ_buf_input;
+    pj_lock_t            *circ_buf_input_mutex;
+
     int                   tls_init_count; /* library initialization counter */
 };
 
@@ -182,18 +184,28 @@ static pj_status_t circ_init(pj_pool_factory *factory, circ_buf_t *cb, pj_size_t
     cb->readp  = 0;
     cb->writep = 0;
     cb->size   = 0;
+
+    /* Initial pool holding the buffer elements */
     cb->pool   = pj_pool_create(factory, "tls-ring%p", cap, cap, NULL);
     if (!cb->pool)
         return PJ_ENOMEM;
+
+    /* Allocate circular buffer */
     cb->buf    = pj_pool_alloc(cb->pool, cap);
-    if (!cb->buf)
+    if (!cb->buf) {
+        pj_pool_release(cb->pool);
         return PJ_ENOMEM;
+    }
+
     return PJ_SUCCESS;
 }
 
 static void circ_deinit(circ_buf_t *cb)
 {
-    pj_pool_release(cb->pool);
+    if (cb->pool) {
+        pj_pool_release(cb->pool);
+        cb->pool = NULL;
+    }
 }
 
 static pj_bool_t circ_full(const circ_buf_t *cb)
@@ -206,7 +218,12 @@ static pj_bool_t circ_empty(const circ_buf_t *cb)
     return cb->size == 0;
 }
 
-static pj_bool_t circ_avail(const circ_buf_t *cb)
+static pj_size_t circ_size(const circ_buf_t *cb)
+{
+    return cb->size;
+}
+
+static pj_size_t circ_avail(const circ_buf_t *cb)
 {
     return cb->cap - cb->size;
 }
@@ -228,34 +245,54 @@ static void circ_read(circ_buf_t *cb, pj_uint8_t *dst, pj_size_t len)
 
 static pj_status_t circ_write(circ_buf_t *cb, const pj_uint8_t *src, pj_size_t len)
 {
-    /* overflow condition */
+    /* Overflow condition: resize */
     if (len > circ_avail(cb)) {
-        /* find the New Minimum Capacity for the ring as a power of 2 */
-        pj_size_t nmc = cb->size + len;
-        nmc--;
-        nmc |= nmc >> 1;
-        nmc |= nmc >> 2;
-        nmc |= nmc >> 4;
-        nmc |= nmc >> 8;
-        nmc |= nmc >> 16;
-        nmc++;
-        /* recreate the buffer only with the new pool */
-        pj_pool_t *pool = pj_pool_create(cb->pool->factory, "tls%p", nmc, nmc, NULL);
+        /* Minimum required capacity */
+        pj_size_t min_cap = len + cb->size;
+
+        PJ_LOG(1, ("circ", "***** need %d bytes free, have %d bytes free", len, circ_avail(cb)));
+
+        /* Next 32-bit power of two */
+        min_cap--;
+        min_cap |= min_cap >> 1;
+        min_cap |= min_cap >> 2;
+        min_cap |= min_cap >> 4;
+        min_cap |= min_cap >> 8;
+        min_cap |= min_cap >> 16;
+        min_cap++;
+
+        PJ_LOG(1, ("circ", "***** resizing to %d", min_cap));
+
+        /* Create a new pool to hold the bigger buffer; use the same pool factory */
+        pj_pool_t *pool = pj_pool_create(cb->pool->factory, "tls%p", min_cap, min_cap, NULL);
         if (!pool)
             return PJ_ENOMEM;
-        pj_uint8_t *buf = pj_pool_alloc(pool, nmc);
-        if (!buf)
+
+        /* Allocate our new buffer */
+        pj_uint8_t *buf = pj_pool_alloc(pool, min_cap);
+        if (!buf) {
+            pj_pool_release(pool);
             return PJ_ENOMEM;
-        /* copy old data in new one */
+        }
+
+        /* Save old size, which we shall restore after the next read */
+        pj_size_t old_size = cb->size;
+
+        /* Copy old data into beginning of new buffer */
         circ_read(cb, buf, cb->size);
-        /* "free" the previously allocated memory */
-        circ_deinit(cb);
-        /* init the new cb */
+
+        /* Restore old size now */
+        cb->size = old_size;
+
+        /* Release the previous pool */
+        pj_pool_release(cb->pool);
+
+        /* Update circular buffer members */
         cb->pool = pool;
         cb->buf = buf;
         cb->readp = 0;
         cb->writep = cb->size;
-        cb->cap = nmc;
+        cb->cap = min_cap;
     }
 
     pj_size_t size_after = cb->cap - cb->writep;
@@ -269,6 +306,7 @@ static pj_status_t circ_write(circ_buf_t *cb, const pj_uint8_t *src, pj_size_t l
     cb->writep &= (cb->cap - 1);
 
     cb->size += len;
+
     return PJ_SUCCESS;
 }
 
@@ -562,14 +600,23 @@ static ssize_t tls_data_push(gnutls_transport_ptr_t ptr, const void *data, size_
 /* gnutls_handshake() and gnutls_record_recv() will call this function receive data
  * however asock_on_data_read() may have moved data from socket to memory already
  * so also allow the possibility of reading from a memory buffer */
-static ssize_t tls_data_pull(gnutls_transport_ptr_t ptr, void *data, size_t len)
+static ssize_t tls_data_pull(gnutls_transport_ptr_t ptr, void *data, pj_size_t len)
 {
+    PJ_LOG(1, ("data_pull", "********* OMG len=%d", len));
+
     pj_ssl_sock_t *ssock = (pj_ssl_sock_t *)ptr;
 
-    if (ssock->circ_buf.size >= len) {
-        circ_read(&ssock->circ_buf, data, len);
+    pj_lock_acquire(ssock->circ_buf_input_mutex);
+
+    if (circ_size(&ssock->circ_buf_input) >= len) {
+        circ_read(&ssock->circ_buf_input, data, len);
+
+        pj_lock_release(ssock->circ_buf_input_mutex);
+
         return len;
     } else {
+        pj_lock_release(ssock->circ_buf_input_mutex);
+
         /* Data buffers not yet filled */
         errno = EAGAIN;
         return -1;
@@ -810,6 +857,11 @@ static pj_status_t tls_open(pj_ssl_sock_t *ssock)
     gnutls_transport_set_ptr(ssock->session, (gnutls_transport_ptr_t) (uintptr_t) ssock);
     gnutls_session_set_ptr(ssock->session, (gnutls_transport_ptr_t) (uintptr_t) ssock);
 
+    /* Initialize input circular buffer */
+    status = circ_init(ssock->pool->factory, &ssock->circ_buf_input, 512);
+    if (status != PJ_SUCCESS)
+        return status;
+
     /* Set the callback that allows GnuTLS to PUSH and PULL data
      * TO and FROM the transport layer */
     gnutls_transport_set_push_function(ssock->session, tls_data_push);
@@ -907,8 +959,6 @@ static pj_status_t tls_open(pj_ssl_sock_t *ssock)
         return PJ_EINVAL;
     }
 
-    return circ_init(ssock->pool->factory, &ssock->circ_buf, 2048);
-
     return PJ_SUCCESS;
 }
 
@@ -916,15 +966,15 @@ static pj_status_t tls_open(pj_ssl_sock_t *ssock)
 /* Destroy GnuTLS credentials and session. */
 static void tls_close(pj_ssl_sock_t *ssock)
 {
-    if (ssock->xcred) {
-        gnutls_certificate_free_credentials(ssock->xcred);
-        ssock->xcred = NULL;
-    }
-
     if (ssock->session) {
         gnutls_bye(ssock->session, GNUTLS_SHUT_RDWR);
         gnutls_deinit(ssock->session);
         ssock->session = NULL;
+    }
+
+    if (ssock->xcred) {
+        gnutls_certificate_free_credentials(ssock->xcred);
+        ssock->xcred = NULL;
     }
 
     /* Free GnuTLS library if this is the last */
@@ -932,6 +982,9 @@ static void tls_close(pj_ssl_sock_t *ssock)
         ssock->tls_init_count--;
         tls_deinit();
     }
+
+    /* Destroy circular buffer */
+    circ_deinit(&ssock->circ_buf_input);
 }
 
 
@@ -1557,7 +1610,10 @@ static pj_bool_t asock_on_data_read(pj_activesock_t *asock,
                            pj_activesock_get_user_data(asock);
 
     if (data && size > 0) {
-        circ_write(&ssock->circ_buf, data, size);
+        /* Push data into input circular buffer (for GnuTLS) */
+        pj_lock_acquire(ssock->circ_buf_input_mutex);
+        circ_write(&ssock->circ_buf_input, data, size);
+        pj_lock_release(ssock->circ_buf_input_mutex);
     } else
         goto on_error;
 
@@ -1576,28 +1632,36 @@ static pj_bool_t asock_on_data_read(pj_activesock_t *asock,
 
     /* See if there is any decrypted data for the application */
     if (ssock->read_started) {
-        int decoded_size;
-        void *decoded_data = (void *)pj_pool_calloc(ssock->pool, size, 1);
+        read_data_t *app_read_data = *(OFFSET_OF_READ_DATA_PTR(ssock, data));
+        int app_data_size = (int)(ssock->read_size - app_read_data->len);
 
-        /* Save the encrypted data and let deal with it */
-        decoded_size = gnutls_record_recv(ssock->session, decoded_data, size);
+        /* Decrypt received data using GnuTLS (will read our input circular buffer) */
+        int decrypted_size = gnutls_record_recv(ssock->session,
+                                                app_read_data->data + app_read_data->len,
+                                                app_data_size);
 
-        if (decoded_size > 0) {
-
+        if (decrypted_size > 0) {
             if (ssock->param.cb.on_data_read) {
                 pj_bool_t ret;
-                pj_size_t remainder_ = 0;
+                pj_size_t app_remainder = 0;
+
+                if (decrypted_size > 0) {
+                    app_read_data->len += decrypted_size;
+                }
 
                 // PJ_EEOF because we always read all data received
                 ret = (*ssock->param.cb.on_data_read)(ssock,
-                                                      decoded_data,
-                                                      decoded_size,
+                                                      app_read_data->data,
+                                                      app_read_data->len,
                                                       PJ_EEOF,
-                                                      &remainder_);
+                                                      &app_remainder);
                 if (!ret) {
                     /* We've been destroyed */
                     return PJ_FALSE;
                 }
+
+                /* Application may have left some data to be consumed later */
+                app_read_data->len = app_remainder;
             }
 
             /* Active socket signalled connection closed/error, this has
@@ -1612,7 +1676,7 @@ static pj_bool_t asock_on_data_read(pj_activesock_t *asock,
         } else {
             /* A non fatal error here just means that we need more data.
              * Otherwise session is invalidated and it can't be restored. */
-            if (gnutls_error_is_fatal(decoded_size))
+            if (gnutls_error_is_fatal(decrypted_size))
                 goto on_error;
             else
                 return PJ_TRUE;
@@ -1672,6 +1736,7 @@ on_error:
     }
 
     tls_sock_reset(ssock);
+
     return PJ_FALSE;
 }
 
@@ -2074,6 +2139,52 @@ PJ_DEF(pj_bool_t) pj_ssl_cipher_is_supported(pj_ssl_cipher cipher)
     return PJ_FALSE;
 }
 
+static void print_circ_state(circ_buf_t *circ)
+{
+    return;
+
+    PJ_LOG(1, ("test", ">>> capacity: %d", circ->cap));
+    PJ_LOG(1, ("test", ">>> size:     %d", circ->size));
+    PJ_LOG(1, ("test", ">>> readp:    %d", circ->readp));
+    PJ_LOG(1, ("test", ">>> writep:   %d", circ->writep));
+}
+
+static void test(pj_ssl_sock_t *ssock)
+{
+    pj_status_t status;
+    pj_size_t x;
+    circ_buf_t circ;
+    circ_buf_t *pcirc = &circ;
+    static char buf[16];
+
+    status = circ_init(ssock->pool->factory, pcirc, 8);
+    if (status != PJ_SUCCESS) {
+        //PJ_LOG(1, ("test", "### cannot create circular buffer"));
+    }
+    //PJ_LOG(1, ("test", "### initialized circular buffer"));
+
+    pj_lock_acquire(ssock->circ_buf_input_mutex);
+
+    print_circ_state(pcirc);
+
+    for (x = 0; x < 100; ++x) {
+        //PJ_LOG(1, ("test", "### writing 5 bytes"));
+        circ_write(pcirc, "abcde", 5);
+        print_circ_state(pcirc);
+
+        //PJ_LOG(1, ("test", "### reading 3 bytes"));
+        circ_read(pcirc, buf, 3);
+        print_circ_state(pcirc);
+        PJ_LOG(1, ("test", "### read: %c%c%c", buf[0], buf[1], buf[2]));
+    }
+
+    pj_lock_release(ssock->circ_buf_input_mutex);
+
+    circ_deinit(pcirc);
+    PJ_LOG(1, ("test", "### deinitialized circular buffer"));
+
+    while(1);
+}
 
 /* Create SSL socket instance. */
 PJ_DEF(pj_status_t) pj_ssl_sock_create(pj_pool_t *pool,
@@ -2105,6 +2216,13 @@ PJ_DEF(pj_status_t) pj_ssl_sock_create(pj_pool_t *pool,
                                             &ssock->write_mutex);
     if (status != PJ_SUCCESS)
         return status;
+
+    /* Create circular buffer mutex */
+    status = pj_lock_create_simple_mutex(pool, pool->obj_name, &ssock->circ_buf_input_mutex);
+    if (status != PJ_SUCCESS)
+        return status;
+
+    //test(ssock);
 
     /* Init secure socket param */
     ssock->param = *param;
@@ -2147,7 +2265,9 @@ PJ_DEF(pj_status_t) pj_ssl_sock_close(pj_ssl_sock_t *ssock)
     }
 
     tls_sock_reset(ssock);
+
     pj_lock_destroy(ssock->write_mutex);
+    pj_lock_destroy(ssock->circ_buf_input_mutex);
 
     pool = ssock->pool;
     ssock->pool = NULL;
