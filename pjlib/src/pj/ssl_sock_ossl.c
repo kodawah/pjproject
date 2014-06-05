@@ -1694,6 +1694,7 @@ static pj_bool_t asock_on_data_read(pj_activesock_t *asock,
     /* See if there is any decrypted data for the application */
     if (ssock->read_started) {
         do {
+            /* Get read data structure at the end of the data */
             read_data_t *app_read_data = *(OFFSET_OF_READ_DATA_PTR(ssock, data));
             int app_data_size = (int)(ssock->read_size - app_read_data->len);
 
@@ -1713,7 +1714,6 @@ static pj_bool_t asock_on_data_read(pj_activesock_t *asock,
                         app_read_data->len += decrypted_size;
                     }
 
-                    // PJ_EEOF because we always read all data received
                     PJ_LOG(1, (THIS_FILE, "***** calling user's on_data_read()"));
                     ret = (*ssock->param.cb.on_data_read)(ssock,
                                                           app_read_data->data,
@@ -1779,24 +1779,6 @@ static pj_bool_t asock_on_data_read(pj_activesock_t *asock,
     }
 
     return PJ_TRUE;
-
-on_error:
-    if (ssock->connection_state == TLS_STATE_HANDSHAKING)
-        return on_handshake_complete(ssock, status);
-
-    if (ssock->read_started && ssock->param.cb.on_data_read) {
-        pj_bool_t ret;
-        ret = (*ssock->param.cb.on_data_read)(ssock, NULL, 0, status,
-                                              remainder);
-        if (!ret) {
-            /* We've been destroyed */
-            return PJ_FALSE;
-        }
-    }
-
-    tls_sock_reset(ssock);
-
-    return PJ_FALSE;
 }
 
 
@@ -3050,6 +3032,7 @@ PJ_DEF(pj_status_t) pj_ssl_sock_renegotiate(pj_ssl_sock_t *ssock)
          *   - GNUTLS_E_REHANDSHAKE: rehandshake message processing
          *   - GNUTLS_E_WARNING_ALERT_RECEIVED: client does not wish to renegociate
          */
+        ssock->connection_state = TLS_STATE_HANDSHAKING;
         status = tls_try_handshake(ssock);
 
         PJ_LOG(1, (THIS_FILE, "***** tls_try_handshake() returned: %d", status));
