@@ -519,6 +519,7 @@ static int echo_test(pj_ssl_sock_proto srv_proto, pj_ssl_sock_proto cli_proto,
     }
 
     pj_ssl_sock_param_default(&param);
+    param.send_buffer_size = 128 * 1024;
     param.cb.on_accept_complete = &ssl_on_accept_complete;
     param.cb.on_connect_complete = &ssl_on_connect_complete;
     param.cb.on_data_read = &ssl_on_data_read;
@@ -650,6 +651,7 @@ static int echo_test(pj_ssl_sock_proto srv_proto, pj_ssl_sock_proto cli_proto,
 #else
 	pj_time_val delay = {0, 100};
 	pj_ioqueue_poll(ioqueue, &delay);
+	//PJ_LOG(1, ("sslsocktest", "[[[[[ pj_ioqueue_poll() ]]]]]"));
 #endif
     }
 
@@ -1367,9 +1369,7 @@ int ssl_sock_test(void)
 	return ret;
 
     PJ_LOG(3,("", "..https client test"));
-    ret = https_client_test(30000);
-
-    return 0;
+    //https_client_test(30000);
 
     // Ignore test result as internet connection may not be available.
     //if (ret != 0)
@@ -1381,7 +1381,6 @@ int ssl_sock_test(void)
      * and it hasn't supported server mode, so exclude the following tests,
      * which require SSL server, for now.
      */
-
 #if 0
     PJ_LOG(3,("", "..echo test w/ SSLv3 and PJ_TLS_RSA_EXPORT_WITH_RC4_40_MD5 cipher"));
     ret = echo_test(PJ_SSL_SOCK_PROTO_SSL3, PJ_SSL_SOCK_PROTO_SSL3,
@@ -1391,14 +1390,13 @@ int ssl_sock_test(void)
 	return ret;
 #endif
 
+#if 0
     PJ_LOG(3,("", "..echo test w/ SSLv23 and PJ_TLS_RSA_WITH_AES_256_CBC_SHA cipher"));
     ret = echo_test(PJ_SSL_SOCK_PROTO_SSL23, PJ_SSL_SOCK_PROTO_SSL23, 
 		    PJ_TLS_RSA_WITH_AES_256_CBC_SHA, PJ_TLS_RSA_WITH_AES_256_CBC_SHA,
 		    PJ_FALSE, PJ_FALSE);
     if (ret != 0)
 	return ret;
-
-	return 0;
 
     PJ_LOG(3,("", "..echo test w/ incompatible proto"));
     ret = echo_test(PJ_SSL_SOCK_PROTO_TLS1, PJ_SSL_SOCK_PROTO_SSL3, 
@@ -1420,6 +1418,7 @@ int ssl_sock_test(void)
 		    PJ_TRUE, PJ_FALSE);
     if (ret == 0)
 	return PJ_EBUG;
+#endif
 
     PJ_LOG(3,("", "..echo test w/ client cert required and provided"));
     ret = echo_test(PJ_SSL_SOCK_PROTO_DEFAULT, PJ_SSL_SOCK_PROTO_DEFAULT, 
@@ -1427,6 +1426,8 @@ int ssl_sock_test(void)
 		    PJ_TRUE, PJ_TRUE);
     if (ret != 0)
 	return ret;
+
+    return 0;
 
     PJ_LOG(3,("", "..performance test"));
     ret = perf_test(PJ_IOQUEUE_MAX_HANDLES/2 - 1, 0);
