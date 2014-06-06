@@ -1729,10 +1729,13 @@ static pj_bool_t asock_on_data_read(pj_activesock_t *asock,
             PJ_LOG(1, (THIS_FILE, "***** oops, connection close/reset during handshake"));
 
             /* Oops, connection close/reset during handshake */
-            ret = (*ssock->param.cb.on_data_read)(ssock, NULL, 0, status, remainder);
+            if (ssock->param.cb.on_data_read) {
+                PJ_LOG(1, (THIS_FILE, "***** calling user's on_data_read() with status=%d", status));
+                ret = (*ssock->param.cb.on_data_read)(ssock, NULL, 0, status, remainder);
 
-            if (!ret) {
-                return PJ_FALSE;
+                if (!ret) {
+                    return PJ_FALSE;
+                }
             }
 
             tls_sock_reset(ssock);
