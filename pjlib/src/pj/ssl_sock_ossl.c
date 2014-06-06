@@ -3014,7 +3014,8 @@ PJ_DEF(pj_status_t) pj_ssl_sock_renegotiate(pj_ssl_sock_t *ssock)
     PJ_ASSERT_RETURN(ssock->connection_state == TLS_STATE_ESTABLISHED,
                      PJ_EINVALIDOP);
 
-    /* Cannot renegotiate we're a client */
+    /* Cannot renegotiate; we're a client */
+    /* FIXME: in fact maybe that's not true */
     PJ_ASSERT_RETURN(!ssock->is_server, PJ_EINVALIDOP);
 
     PJ_LOG(1, (THIS_FILE, "***** calling gnutls_rehandshake()"));
