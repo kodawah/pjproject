@@ -1715,33 +1715,14 @@ static pj_bool_t asock_on_data_read(pj_activesock_t *asock,
 
     /* Check if SSL handshake hasn't finished yet */
     if (ssock->connection_state == TLS_STATE_HANDSHAKING) {
-        PJ_LOG(1, (THIS_FILE, "***** currently handshaking"));
-
         pj_bool_t ret = PJ_TRUE;
 
-        pj_status_t try_handshake_status = tls_try_handshake(ssock);
+        if (status == PJ_SUCCESS)
+            status = tls_try_handshake(ssock);
 
         /* Not pending is either success or failed */
-        if (try_handshake_status != PJ_EPENDING)
-            ret = on_handshake_complete(ssock, try_handshake_status);
-
-        if (status != PJ_SUCCESS) {
-            PJ_LOG(1, (THIS_FILE, "***** oops, connection close/reset during handshake"));
-
-            /* Oops, connection close/reset during handshake */
-            if (ssock->param.cb.on_data_read) {
-                PJ_LOG(1, (THIS_FILE, "***** calling user's on_data_read() with status=%d", status));
-                ret = (*ssock->param.cb.on_data_read)(ssock, NULL, 0, status, remainder);
-
-                if (!ret) {
-                    return PJ_FALSE;
-                }
-            }
-
-            tls_sock_reset(ssock);
-
-            return PJ_FALSE;
-        }
+        if (status != PJ_EPENDING)
+            ret = on_handshake_complete(ssock, status);
 
         return ret;
     }
