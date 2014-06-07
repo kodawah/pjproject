@@ -49,7 +49,7 @@
 #define TRUST_STORE_FILE2 "/etc/ssl/certs/ca-bundle.crt"
 
 /* Debugging output level for GnuTLS only */
-#define LOG_LEVEL 10
+#define LOG_LEVEL 0
 
 /* GnuTLS includes */
 #include <gnutls/gnutls.h>
