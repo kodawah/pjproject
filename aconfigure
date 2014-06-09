@@ -637,6 +637,8 @@ ac_no_opencore_amrnb
 libcrypto_present
 libssl_present
 openssl_h_present
+libgnutls_present
+gnutls_h_present
 ac_no_ssl
 ac_openh264_ldflags
 ac_openh264_cflags
@@ -1462,8 +1464,8 @@ Optional Features:
                           package and samples location using IPPROOT and
                           IPPSAMPLES env var or with --with-ipp and
                           --with-ipp-samples options
-  --disable-ssl           Exclude SSL support the build (default: autodetect)
-
+  --enable-ssl=backend    Select 'gnutls' or 'openssl' (default) to provide
+                          SSL support (autodetect)
   --disable-opencore-amr  Exclude OpenCORE AMR support from the build
                           (default: autodetect)
 
@@ -7482,33 +7484,103 @@ fi
 
 # Check whether --enable-ssl was given.
 if test "${enable_ssl+set}" = set; then :
-  enableval=$enable_ssl;
-		if test "$enable_ssl" = "no"; then
-		 ac_no_ssl=1
-		 { $as_echo "$as_me:${as_lineno-$LINENO}: result: Checking if SSL support is disabled... yes" >&5
-$as_echo "Checking if SSL support is disabled... yes" >&6; }
-	        fi
-
-else
-
-		{ $as_echo "$as_me:${as_lineno-$LINENO}: result: checking for OpenSSL installations.." >&5
-$as_echo "checking for OpenSSL installations.." >&6; }
-                if test "x$with_ssl" != "xno" -a "x$with_ssl" != "x"; then
-                    CFLAGS="$CFLAGS -I$with_ssl/include"
-                    LDFLAGS="$LDFLAGS -L$with_ssl/lib"
-                    { $as_echo "$as_me:${as_lineno-$LINENO}: result: Using SSL prefix... $with_ssl" >&5
-$as_echo "Using SSL prefix... $with_ssl" >&6; }
+  enableval=$enable_ssl;  if test "x$enableval" = "xgnutls"; then
+                    ssl_backend="gnutls"
+                else
+                    ssl_backend="openssl"
                 fi
 
+fi
 
 
-		ac_fn_c_check_header_mongrel "$LINENO" "openssl/ssl.h" "ac_cv_header_openssl_ssl_h" "$ac_includes_default"
+if test "x$enable_ssl" = "xno"; then
+    ac_no_ssl=1
+    { $as_echo "$as_me:${as_lineno-$LINENO}: result: Checking if SSL support is disabled... yes" >&5
+$as_echo "Checking if SSL support is disabled... yes" >&6; }
+else
+    if test "x$with_ssl" != "xno" -a "x$with_ssl" != "x"; then
+        CFLAGS="$CFLAGS -I$with_ssl/include"
+        LDFLAGS="$LDFLAGS -L$with_ssl/lib"
+        { $as_echo "$as_me:${as_lineno-$LINENO}: result: Using SSL prefix... $with_ssl" >&5
+$as_echo "Using SSL prefix... $with_ssl" >&6; }
+    fi
+    if test "x$ssl_backend" = "xgnutls"; then
+        { $as_echo "$as_me:${as_lineno-$LINENO}: result: checking for GnuTLS installations.." >&5
+$as_echo "checking for GnuTLS installations.." >&6; }
+
+
+        ac_fn_c_check_header_mongrel "$LINENO" "gnutls/gnutls.h" "ac_cv_header_gnutls_gnutls_h" "$ac_includes_default"
+if test "x$ac_cv_header_gnutls_gnutls_h" = xyes; then :
+  gnutls_h_present=1
+fi
+
+
+        { $as_echo "$as_me:${as_lineno-$LINENO}: checking for gnutls_certificate_set_x509_system_trust in -lgnutls" >&5
+$as_echo_n "checking for gnutls_certificate_set_x509_system_trust in -lgnutls... " >&6; }
+if ${ac_cv_lib_gnutls_gnutls_certificate_set_x509_system_trust+:} false; then :
+  $as_echo_n "(cached) " >&6
+else
+  ac_check_lib_save_LIBS=$LIBS
+LIBS="-lgnutls  $LIBS"
+cat confdefs.h - <<_ACEOF >conftest.$ac_ext
+/* end confdefs.h.  */
+
+/* Override any GCC internal prototype to avoid an error.
+   Use char because int might match the return type of a GCC
+   builtin and then its argument prototype would still apply.  */
+#ifdef __cplusplus
+extern "C"
+#endif
+char gnutls_certificate_set_x509_system_trust ();
+int
+main ()
+{
+return gnutls_certificate_set_x509_system_trust ();
+  ;
+  return 0;
+}
+_ACEOF
+if ac_fn_c_try_link "$LINENO"; then :
+  ac_cv_lib_gnutls_gnutls_certificate_set_x509_system_trust=yes
+else
+  ac_cv_lib_gnutls_gnutls_certificate_set_x509_system_trust=no
+fi
+rm -f core conftest.err conftest.$ac_objext \
+    conftest$ac_exeext conftest.$ac_ext
+LIBS=$ac_check_lib_save_LIBS
+fi
+{ $as_echo "$as_me:${as_lineno-$LINENO}: result: $ac_cv_lib_gnutls_gnutls_certificate_set_x509_system_trust" >&5
+$as_echo "$ac_cv_lib_gnutls_gnutls_certificate_set_x509_system_trust" >&6; }
+if test "x$ac_cv_lib_gnutls_gnutls_certificate_set_x509_system_trust" = xyes; then :
+  libgnutls_present=1 && LIBS="$LIBS -lgnutls"
+fi
+
+        if test "x$gnutls_h_present" = "x1" -a "x$libgnutls_present" = "x1"; then
+            { $as_echo "$as_me:${as_lineno-$LINENO}: result: GnuTLS library found, SSL support enabled" >&5
+$as_echo "GnuTLS library found, SSL support enabled" >&6; }
+            # PJSIP_HAS_TLS_TRANSPORT setting follows PJ_HAS_SSL_SOCK
+            #AC_DEFINE(PJSIP_HAS_TLS_TRANSPORT, 1)
+            $as_echo "#define PJ_HAS_SSL_SOCK 1" >>confdefs.h
+
+            $as_echo "#define PJ_HAS_TLS_SOCK 1" >>confdefs.h
+
+        else
+            { $as_echo "$as_me:${as_lineno-$LINENO}: result: ** No GnuTLS libraries found, disabling SSL support **" >&5
+$as_echo "** No GnuTLS libraries found, disabling SSL support **" >&6; }
+        fi
+    else
+        { $as_echo "$as_me:${as_lineno-$LINENO}: result: checking for OpenSSL installations.." >&5
+$as_echo "checking for OpenSSL installations.." >&6; }
+
+
+
+        ac_fn_c_check_header_mongrel "$LINENO" "openssl/ssl.h" "ac_cv_header_openssl_ssl_h" "$ac_includes_default"
 if test "x$ac_cv_header_openssl_ssl_h" = xyes; then :
   openssl_h_present=1
 fi
 
 
-		{ $as_echo "$as_me:${as_lineno-$LINENO}: checking for ERR_load_BIO_strings in -lcrypto" >&5
+        { $as_echo "$as_me:${as_lineno-$LINENO}: checking for ERR_load_BIO_strings in -lcrypto" >&5
 $as_echo_n "checking for ERR_load_BIO_strings in -lcrypto... " >&6; }
 if ${ac_cv_lib_crypto_ERR_load_BIO_strings+:} false; then :
   $as_echo_n "(cached) " >&6
@@ -7548,7 +7620,7 @@ if test "x$ac_cv_lib_crypto_ERR_load_BIO_strings" = xyes; then :
   libcrypto_present=1 && LIBS="$LIBS -lcrypto"
 fi
 
-		{ $as_echo "$as_me:${as_lineno-$LINENO}: checking for SSL_library_init in -lssl" >&5
+        { $as_echo "$as_me:${as_lineno-$LINENO}: checking for SSL_library_init in -lssl" >&5
 $as_echo_n "checking for SSL_library_init in -lssl... " >&6; }
 if ${ac_cv_lib_ssl_SSL_library_init+:} false; then :
   $as_echo_n "(cached) " >&6
@@ -7588,20 +7660,21 @@ if test "x$ac_cv_lib_ssl_SSL_library_init" = xyes; then :
   libssl_present=1 && LIBS="$LIBS -lssl"
 fi
 
-		if test "x$openssl_h_present" = "x1" -a "x$libssl_present" = "x1" -a "x$libcrypto_present" = "x1"; then
-	        	{ $as_echo "$as_me:${as_lineno-$LINENO}: result: OpenSSL library found, SSL support enabled" >&5
+        if test "x$openssl_h_present" = "x1" -a "x$libssl_present" = "x1" -a "x$libcrypto_present" = "x1"; then
+            { $as_echo "$as_me:${as_lineno-$LINENO}: result: OpenSSL library found, SSL support enabled" >&5
 $as_echo "OpenSSL library found, SSL support enabled" >&6; }
-			# PJSIP_HAS_TLS_TRANSPORT setting follows PJ_HAS_SSL_SOCK
-			#AC_DEFINE(PJSIP_HAS_TLS_TRANSPORT, 1)
-			$as_echo "#define PJ_HAS_SSL_SOCK 1" >>confdefs.h
+            # PJSIP_HAS_TLS_TRANSPORT setting follows PJ_HAS_SSL_SOCK
+            #AC_DEFINE(PJSIP_HAS_TLS_TRANSPORT, 1)
+            $as_echo "#define PJ_HAS_SSL_SOCK 1" >>confdefs.h
 
-		else
-			{ $as_echo "$as_me:${as_lineno-$LINENO}: result: ** OpenSSL libraries not found, disabling SSL support **" >&5
-$as_echo "** OpenSSL libraries not found, disabling SSL support **" >&6; }
-		fi
+            $as_echo "#define PJ_HAS_TLS_SOCK 0" >>confdefs.h
 
+        else
+            { $as_echo "$as_me:${as_lineno-$LINENO}: result: ** No OpenSSL libraries found, disabling SSL support **" >&5
+$as_echo "** No OpenSSL libraries found, disabling SSL support **" >&6; }
+        fi
+    fi
 fi
-
 
 
 # Check whether --with-opencore-amrnb was given.

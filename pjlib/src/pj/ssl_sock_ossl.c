@@ -31,8 +31,10 @@
 #include <pj/timer.h>
 
 
-/* Only build when PJ_HAS_SSL_SOCK is enabled */
-#if defined(PJ_HAS_SSL_SOCK) && PJ_HAS_SSL_SOCK!=0
+/* Only build when PJ_HAS_SSL_SOCK is enabled and when PJ_HAS_TLS_SOCK is
+ * disabled (meaning GnuTLS is off) */
+#if defined(PJ_HAS_SSL_SOCK) && PJ_HAS_SSL_SOCK != 0 && \
+    defined(PJ_HAS_TLS_SOCK) && PJ_HAS_TLS_SOCK == 0
 
 #define THIS_FILE		"ssl_sock_ossl.c"
 
