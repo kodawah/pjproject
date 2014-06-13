@@ -50,7 +50,7 @@
 #define TRUST_STORE_FILE2 "/etc/ssl/certs/ca-bundle.crt"
 
 /* Debugging output level for GnuTLS only */
-#define LOG_LEVEL 0
+#define GNUTLS_LOG_LEVEL 0
 
 /* GnuTLS includes */
 #include <gnutls/gnutls.h>
@@ -218,7 +218,7 @@ static pj_status_t circ_init(pj_pool_factory *factory,
     cb->size   = 0;
 
     /* Initial pool holding the buffer elements */
-    cb->pool = pj_pool_create(factory, "tls-ring%p", cap, cap, NULL);
+    cb->pool = pj_pool_create(factory, "tls-circ%p", cap, cap, NULL);
     if (!cb->pool)
         return PJ_ENOMEM;
 
@@ -288,7 +288,7 @@ static pj_status_t circ_write(circ_buf_t *cb,
         min_cap++;
 
         /* Create a new pool to hold a bigger buffer, using the same factory */
-        pj_pool_t *pool = pj_pool_create(cb->pool->factory, "tls%p",
+        pj_pool_t *pool = pj_pool_create(cb->pool->factory, "tls-circ%p",
                                          min_cap, min_cap, NULL);
         if (!pool)
             return PJ_ENOMEM;
@@ -372,7 +372,6 @@ static pj_status_t tls_status_from_err(pj_ssl_sock_t *ssock, int err)
     case GNUTLS_E_TIMEDOUT:
         status = PJ_ETIMEDOUT;
         break;
-    case GNUTLS_E_INTERRUPTED:
     case GNUTLS_E_PREMATURE_TERMINATION:
         status = PJ_ECANCELLED;
         break;
@@ -381,8 +380,9 @@ static pj_status_t tls_status_from_err(pj_ssl_sock_t *ssock, int err)
         status = PJ_EBUG;
         break;
     case GNUTLS_E_AGAIN:
+    case GNUTLS_E_INTERRUPTED:
     case GNUTLS_E_REHANDSHAKE:
-        status = PJ_EPENDING; // or ebusy
+        status = PJ_EPENDING;
         break;
     case GNUTLS_E_TOO_MANY_EMPTY_PACKETS:
     case GNUTLS_E_TOO_MANY_HANDSHAKE_PACKETS:
@@ -414,14 +414,16 @@ static pj_status_t tls_status_from_err(pj_ssl_sock_t *ssock, int err)
         break;
     }
 
+    /* Not thread safe */
     tls_last_error = err;
-    ssock->last_err = err;
+    if (ssock)
+        ssock->last_err = err;
     return status;
 }
 
 
 /* Get error string from GnuTLS using tls_last_error */
-static pj_str_t ssl_strerror(pj_status_t status,
+static pj_str_t tls_strerror(pj_status_t status,
                              char *buf, pj_size_t bufsize)
 {
     pj_str_t errstr;
@@ -459,12 +461,15 @@ static pj_status_t tls_init(void)
     pj_status_t status = pj_register_strerror(PJ_ERRNO_START_USER +
                                               PJ_ERRNO_SPACE_SIZE * 6,
                                               PJ_ERRNO_SPACE_SIZE,
-                                              &ssl_strerror);
+                                              &tls_strerror);
     pj_assert(status == PJ_SUCCESS);
 
     /* Init GnuTLS library */
-    gnutls_global_init();
-    gnutls_global_set_log_level(LOG_LEVEL);
+    int ret = gnutls_global_init();
+    if (ret < 0)
+        return tls_status_from_err(NULL, ret);
+
+    gnutls_global_set_log_level(GNUTLS_LOG_LEVEL);
     gnutls_global_set_log_function(tls_print_logs);
 
     /* Init available ciphers */
@@ -476,6 +481,9 @@ static pj_status_t tls_init(void)
             const char *suite = gnutls_cipher_suite_info(i, (unsigned char *)id,
                                                          NULL, NULL, NULL, NULL);
             tls_ciphers[i].id = 0;
+            /* usually the array size is bigger than the number of available
+             * ciphers anyway, so by checking here we can exit the loop as soon
+             * as either all ciphers have been added or the array is full */
             if (suite && i < PJ_ARRAY_SIZE(tls_ciphers)) {
                 tls_ciphers[i].id = (pj_ssl_cipher)
                     (pj_uint32_t) ((id[0] << 8) | id[1]);
@@ -552,12 +560,12 @@ static int tls_cert_verify_cb(gnutls_session_t session)
 
         ret = gnutls_x509_crt_init(&cert);
         if (ret < 0)
-            goto fail;
+            goto out;
 
         cert_list = gnutls_certificate_get_peers(session, &cert_list_size);
         if (cert_list == NULL) {
             ret = GNUTLS_E_NO_CERTIFICATE_FOUND;
-            goto fail;
+            goto out;
         }
 
         /* TODO: verify whole chain perhaps? */
@@ -566,18 +574,18 @@ static int tls_cert_verify_cb(gnutls_session_t session)
             ret = gnutls_x509_crt_import(cert, &cert_list[0], GNUTLS_X509_FMT_PEM);
         if (ret < 0) {
             ssock->verify_status |= PJ_SSL_CERT_EINVALID_FORMAT;
-            goto fail;
+            goto out;
         }
         ret = gnutls_x509_crt_check_hostname(cert, ssock->param.server_name.ptr);
         if (ret < 0)
-            goto fail;
+            goto out;
 
         gnutls_x509_crt_deinit(cert);
 
         /* notify GnuTLS to continue handshake normally */
         return GNUTLS_E_SUCCESS;
 
-fail:
+out:
         tls_last_error = ret;
         ssock->verify_status |= PJ_SSL_CERT_EUNKNOWN;
         return GNUTLS_E_CERTIFICATE_ERROR;
@@ -608,9 +616,8 @@ static ssize_t tls_data_push(gnutls_transport_ptr_t ptr,
 }
 
 
-/* gnutls_handshake() and gnutls_record_recv() will call this function receive
- * data however asock_on_data_read() may have moved data from socket to memory
- * already so also allow the possibility of reading from a memory buffer. */
+/* gnutls_handshake() and gnutls_record_recv() will call this function to
+ * receive/read (encrypted) data */
 static ssize_t tls_data_pull(gnutls_transport_ptr_t ptr, void *data, pj_size_t len)
 {
     pj_ssl_sock_t *ssock = (pj_ssl_sock_t *)ptr;
@@ -657,7 +664,7 @@ static pj_status_t tls_priorities_set(pj_ssl_sock_t *ssock)
     char buf[1024];
     pj_str_t cipher_list;
     pj_str_t compression = pj_str("COMP-NULL");
-    pj_str_t server = pj_str(":%SERVER_PRECEDENCE"); // server decides suite
+    pj_str_t server = pj_str(":%SERVER_PRECEDENCE");
     int i, j, ret;
     const char *priority;
     const char *err;
@@ -749,10 +756,10 @@ static pj_status_t tls_priorities_set(pj_ssl_sock_t *ssock)
         }
     }
 
-    /* Disable compression, it's a TLS extension only after all */
+    /* Disable compression, it's a TLS-only extension after all */
     tls_str_append_once(&cipher_list, &compression);
 
-    /* Server should be the one deciding which cripto to use */
+    /* Server will be the one deciding which crypto to use */
     if (ssock->is_server) {
         if (cipher_list.slen + server.slen + 1 > sizeof(buf))
             return PJ_ETOOMANY;
@@ -797,9 +804,12 @@ static pj_status_t tls_trust_set(pj_ssl_sock_t *ssock)
     if (err > 0)
         ntrusts += err;
 
-    return ntrusts > 0 ? PJ_SUCCESS
-                       : ntrusts == 0 ? PJ_ENOTFOUND
-                                      : PJ_EINVAL;
+    if (ntrusts > 0)
+        return PJ_SUCCESS;
+    else if (!ntrusts)
+        return PJ_ENOTFOUND;
+    else
+        reutnr PJ_EINVAL;
 }
 
 
@@ -814,17 +824,21 @@ static pj_status_t tls_open(pj_ssl_sock_t *ssock)
 
     cert = ssock->cert;
 
-    /* Even if reopening is harmless, having one instance only simplifys
+    /* Even if reopening is harmless, having one instance only simplifies
      * deallocating it later on */
     if (!ssock->tls_init_count) {
         ssock->tls_init_count++;
-        tls_init();
+        ret = tls_init();
+        if (ret < 0)
+            return ret;
     } else
         return PJ_SUCCESS;
 
     /* Start this socket session */
-    gnutls_init(&ssock->session, ssock->is_server ? GNUTLS_SERVER
-                                                  : GNUTLS_CLIENT);
+    ret = gnutls_init(&ssock->session, ssock->is_server ? GNUTLS_SERVER
+                                                        : GNUTLS_CLIENT);
+    if (ret < 0)
+        goto out;
 
     /* Set the ssock object to be retrieved by transport (send/recv) and by
      * user data from this session */
@@ -854,7 +868,9 @@ static pj_status_t tls_open(pj_ssl_sock_t *ssock)
         return status;
 
     /* Allocate credentials for handshaking and transmission */
-    gnutls_certificate_allocate_credentials(&ssock->xcred);
+    ret = gnutls_certificate_allocate_credentials(&ssock->xcred);
+    if (ret < 0)
+        goto out;
     gnutls_certificate_set_verify_function(ssock->xcred, tls_cert_verify_cb);
 
     /* Load system trust file(s) */
@@ -867,60 +883,60 @@ static pj_status_t tls_open(pj_ssl_sock_t *ssock)
         /* Load CA if one is specified. */
         if (cert->CA_file.slen) {
             ret = gnutls_certificate_set_x509_trust_file(ssock->xcred,
-                                                            cert->CA_file.ptr,
-                                                            GNUTLS_X509_FMT_PEM);
+                                                         cert->CA_file.ptr,
+                                                         GNUTLS_X509_FMT_PEM);
             if (ret < 0)
                 ret = gnutls_certificate_set_x509_trust_file(ssock->xcred,
                                                              cert->CA_file.ptr,
                                                              GNUTLS_X509_FMT_DER);
-            if (ret < 0) {
-                tls_last_error = ret;
-                return PJ_EINVAL;
-            }
+            if (ret < 0)
+                goto out;
         }
 
         /* Load certificate, key and pass if one is specified */
         if (cert->cert_file.slen) {
+            const char *prikey_file = cert->privkey_file.slen
+                                    ? cert->privkey_file.ptr
+                                    : NULL;
+            const char *prikey_pass = (cert->privkey_file.slen &&
+                                       cert->privkey_pass.slen)
+                                    ? cert->privkey_pass.ptr
+                                    : NULL;
             ret = gnutls_certificate_set_x509_key_file2(ssock->xcred,
                                                         cert->cert_file.ptr,
-                                                        cert->privkey_file.slen ? cert->privkey_file.ptr
-                                                                                : NULL,
+                                                        prikey_file,
                                                         GNUTLS_X509_FMT_PEM,
-                                                        (cert->privkey_file.slen &&
-                                                        cert->privkey_pass.slen) ? cert->privkey_pass.ptr
-                                                                                 : NULL,
+                                                        prikey_pass,
                                                         0);
             if (ret != GNUTLS_E_SUCCESS)
                 ret = gnutls_certificate_set_x509_key_file2(ssock->xcred,
                                                             cert->cert_file.ptr,
-                                                            cert->privkey_file.slen ? cert->privkey_file.ptr
-                                                                                    : NULL,
+                                                            privkey_file,
                                                             GNUTLS_X509_FMT_DER,
-                                                            (cert->privkey_file.slen &&
-                                                            cert->privkey_pass.slen) ? cert->privkey_pass.ptr
-                                                                                     : NULL,
+                                                            privkey_pass,
                                                             0);
-            if (ret != GNUTLS_E_SUCCESS) {
-                tls_last_error = ret;
-                return PJ_EINVAL;
-            }
+            if (ret < 0)
+                goto out;
         }
     }
 
     /* Require client certificate if asked */
-    if (ssock->is_server && ssock->param.require_client_cert)
-        gnutls_certificate_server_set_request(ssock->session,
-                                              GNUTLS_CERT_REQUIRE);
+    if (ssock->is_server && ssock->param.require_client_cert) {
+        ret = gnutls_certificate_server_set_request(ssock->session,
+                                                    GNUTLS_CERT_REQUIRE);
+        if (ret < 0)
+            goto out;
+    }
 
     /* Finally set credentials for this session */
     ret = gnutls_credentials_set(ssock->session,
                                  GNUTLS_CRD_CERTIFICATE, ssock->xcred);
-    if (ret < 0) {
-        tls_last_error = ret;
-        return PJ_EINVAL;
-    }
+    if (ret < 0)
+        goto out;
 
-    return PJ_SUCCESS;
+    ret = GNUTLS_E_SUCCESS;
+out:
+    return tls_status_from_err(ssock, ret);
 }
 
 
@@ -938,7 +954,7 @@ static void tls_close(pj_ssl_sock_t *ssock)
         ssock->xcred = NULL;
     }
 
-    /* Free GnuTLS library if this is the last */
+    /* Free GnuTLS library */
     if (ssock->tls_init_count) {
         ssock->tls_init_count--;
         tls_deinit();
@@ -1050,11 +1066,17 @@ static void tls_cert_get_info(pj_pool_t *pool, pj_ssl_cert_info *ci,
         char out[256] = { 0 };
         /* Get the number of all alternate names so that we can allocate
          * the correct number of bytes in subj_alt_name */
-        while (gnutls_x509_crt_get_subject_alt_name(cert, seq, out, &len, NULL) != GNUTLS_E_REQUESTED_DATA_NOT_AVAILABLE)
+        while (gnutls_x509_crt_get_subject_alt_name(cert, seq, out, &len,
+                                                    NULL) != GNUTLS_E_REQUESTED_DATA_NOT_AVAILABLE)
             seq++;
 
         ci->subj_alt_name.entry = pj_pool_calloc(pool, seq,
                                                  sizeof(*ci->subj_alt_name.entry));
+        if (!ci->subj_alt_name.entry) {
+            tls_last_error = GNUTLS_E_MEMORY_ERROR;
+            return;
+        }
+
         /* Now populate the alternative names */
         for (i = 0; i < seq; i++) {
             len = sizeof(out) - 1;
@@ -1154,8 +1176,6 @@ peer_out:
         gnutls_x509_crt_deinit(cert);
     else
         pj_bzero(&ssock->remote_cert_info, sizeof(pj_ssl_cert_info));
-
-    return;
 }
 
 
@@ -1166,6 +1186,8 @@ peer_out:
 static pj_bool_t on_handshake_complete(pj_ssl_sock_t *ssock,
                                        pj_status_t status)
 {
+    pj_bool_t ret = PJ_TRUE;
+
     /* Cancel handshake timer */
     if (ssock->timer.id == TIMER_HANDSHAKE_TIMEOUT) {
         pj_timer_heap_cancel(ssock->param.timer_heap, &ssock->timer);
@@ -1210,38 +1232,32 @@ static pj_bool_t on_handshake_complete(pj_ssl_sock_t *ssock,
             {
                 pj_ssl_sock_close(ssock);
             }
-            return PJ_FALSE;
+
+            ret = PJ_FALSE;
         }
         /* Notify application the newly accepted SSL socket */
-        if (ssock->param.cb.on_accept_complete) {
-            pj_bool_t ret;
-
+        if (ssock->param.cb.on_accept_complete)
             ret = (*ssock->param.cb.on_accept_complete)
                       (ssock->parent, ssock, (pj_sockaddr_t*)&ssock->rem_addr,
                        pj_sockaddr_get_len((pj_sockaddr_t*)&ssock->rem_addr));
-            if (ret == PJ_FALSE)
-                return PJ_FALSE;
-        }
+
     } else { /* Connecting */
-        /* On failure, reset SSL socket state first, as app may try to
+        /* On outure, reset SSL socket state first, as app may try to
          * reconnect in the callback. */
         if (status != PJ_SUCCESS) {
-            /* Server disconnected us, possibly due to negotiation failure */
+            /* Server disconnected us, possibly due to negotiation outure */
             tls_sock_reset(ssock);
         }
         if (ssock->param.cb.on_connect_complete) {
-            pj_bool_t ret;
 
             ret = (*ssock->param.cb.on_connect_complete)(ssock, status);
-            if (ret == PJ_FALSE)
-                return PJ_FALSE;
         }
     }
 
-    return PJ_TRUE;
+    return ret;
 }
 
-static write_data_t* alloc_send_data(pj_ssl_sock_t *ssock, pj_size_t len)
+static write_data_t *alloc_send_data(pj_ssl_sock_t *ssock, pj_size_t len)
 {
     send_buf_t *send_buf = &ssock->send_buf;
     pj_size_t avail_len, skipped_len = 0;
@@ -1263,8 +1279,7 @@ static write_data_t* alloc_send_data(pj_ssl_sock_t *ssock, pj_size_t len)
     }
 
     /* Free space may be wrapped/splitted into two regions, so let's
-     * analyze them if any region can hold the write data.
-     */
+     * analyze them if any region can hold the write data. */
     reg1 = send_buf->start + send_buf->len;
     if (reg1 >= send_buf->buf + send_buf->max_len)
         reg1 -= send_buf->max_len;
@@ -1412,9 +1427,9 @@ pj_status_t pj_ssl_sock_ossl_test_send_buf(pj_pool_t *pool)
 #endif
 
 /* Flush write circular buffer to network socket. */
-static pj_status_t flush_write_bio(pj_ssl_sock_t *ssock,
-                                   pj_ioqueue_op_key_t *send_key,
-                                   pj_size_t orig_len, unsigned flags)
+static pj_status_t flush_circ_buf_output(pj_ssl_sock_t *ssock,
+                                         pj_ioqueue_op_key_t *send_key,
+                                         pj_size_t orig_len, unsigned flags)
 {
     pj_ssize_t len;
     write_data_t *wdata;
@@ -1459,14 +1474,14 @@ static pj_status_t flush_write_bio(pj_ssl_sock_t *ssock,
     /* Send it */
     if (ssock->param.sock_type == pj_SOCK_STREAM()) {
         status = pj_activesock_send(ssock->asock, &wdata->key,
-                        wdata->data.content, &len,
-                        flags);
+                                    wdata->data.content, &len,
+                                    flags);
     } else {
         status = pj_activesock_sendto(ssock->asock, &wdata->key,
-                          wdata->data.content, &len,
-                          flags,
-                          (pj_sockaddr_t*)&ssock->rem_addr,
-                          ssock->addr_len);
+                                      wdata->data.content, &len,
+                                      flags,
+                                      (pj_sockaddr_t*)&ssock->rem_addr,
+                                      ssock->addr_len);
     }
 
     if (status != PJ_EPENDING) {
@@ -1515,10 +1530,9 @@ static pj_status_t tls_try_handshake(pj_ssl_sock_t *ssock)
     /* Perform SSL handshake */
     ret = gnutls_handshake(ssock->session);
 
-    status = flush_write_bio(ssock, &ssock->handshake_op_key, 0, 0);
+    status = flush_circ_buf_output(ssock, &ssock->handshake_op_key, 0, 0);
     if (status != PJ_SUCCESS)
         return status;
-    /* FIXME: should we check the returned value? */
 
     if (ret == GNUTLS_E_SUCCESS) {
         /* System are GO */
@@ -1749,7 +1763,7 @@ static pj_bool_t asock_on_accept_complete(pj_activesock_t *asock,
     status = pj_sock_getsockname(ssock->sock, &ssock->local_addr,
                                  &ssock->addr_len);
     if (status != PJ_SUCCESS) {
-        /* This fails on few envs, e.g: win IOCP, just tolerate this and
+        /* This outs on few envs, e.g: win IOCP, just tolerate this and
          * use parent local address instead.
          */
         pj_sockaddr_cp(&ssock->local_addr, &ssock_parent->local_addr);
@@ -1996,6 +2010,7 @@ PJ_DEF(pj_status_t) pj_ssl_cipher_get_availables(pj_ssl_cipher ciphers[],
 
     PJ_ASSERT_RETURN(ciphers && cipher_num, PJ_EINVAL);
 
+    /* init/deint to fill the array of ciphers */
     if (!tls_available_ciphers) {
         tls_init();
         tls_deinit();
@@ -2020,6 +2035,7 @@ PJ_DEF(const char *)pj_ssl_cipher_name(pj_ssl_cipher cipher)
 {
     unsigned int i;
 
+    /* init/deint to fill the array of ciphers */
     if (!tls_available_ciphers) {
         tls_init();
         tls_deinit();
@@ -2039,6 +2055,7 @@ PJ_DEF(pj_ssl_cipher) pj_ssl_cipher_id(const char *cipher_name)
 {
     unsigned int i;
 
+    /* init/deint to fill the array of ciphers */
     if (!tls_available_ciphers) {
         tls_init();
         tls_deinit();
@@ -2058,6 +2075,7 @@ PJ_DEF(pj_bool_t) pj_ssl_cipher_is_supported(pj_ssl_cipher cipher)
 {
     unsigned int i;
 
+    /* init/deint to fill the array of ciphers */
     if (!tls_available_ciphers) {
         tls_init();
         tls_deinit();
@@ -2378,28 +2396,25 @@ static pj_status_t tls_write(pj_ssl_sock_t *ssock,
         if (nwritten > 0) {
             /* Good, some data was encrypted and written */
             total_written += nwritten;
-        } else if (nwritten == GNUTLS_E_INTERRUPTED ||
-                   nwritten == GNUTLS_E_AGAIN) {
-            /* We will just try again */
         } else {
-            /* That's fatal */
-            if (gnutls_error_is_fatal(nwritten))
-                return tls_status_from_err(ssock, nwritten);
-            else
-                return PJ_EBUSY;
+            /* Normally we would have to retry record_send but our internal
+             * state has not changed, so we have to ask for more data first.
+             * We will just try again later, although this should never happen.
+             */
+            return tls_status_from_err(ssock, nwritten);
         }
     }
 
-    if (total_written == size) {
-        /* All encrypted data is written to the output circular buffer;
-         * now send it on the socket. */
-        status = flush_write_bio(ssock, send_key, size, flags);
-    } else {
+    /* All encrypted data is written to the output circular buffer;
+     * now send it on the socket (or notify problem). */
+    if (total_written == size)
+        status = flush_circ_buf_output(ssock, send_key, size, flags);
+    else
         status = PJ_ENOMEM;
-    }
 
     return status;
 }
+
 
 /* Flush delayed data sending in the write pending list. */
 static pj_status_t flush_delayed_send(pj_ssl_sock_t *ssock)
